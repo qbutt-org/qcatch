@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>qcatch</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font:
+          16px/1.6 "Segoe UI Variable",
+          "Segoe UI",
+          system-ui,
+          sans-serif;
+        background: #16191c;
+        color: #f1f4f6;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0 auto;
+        max-width: 680px;
+        padding: 40px 24px 64px;
+      }
+      header {
+        align-items: center;
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 64px;
+      }
+      .brand {
+        align-items: center;
+        display: flex;
+        font-size: 21px;
+        font-weight: 600;
+        gap: 10px;
+        letter-spacing: -0.025em;
+      }
+      .brand img {
+        height: 32px;
+        width: 32px;
+      }
+      h1 {
+        font-size: clamp(30px, 6vw, 40px);
+        font-weight: 600;
+        letter-spacing: -0.04em;
+        line-height: 1.15;
+        margin: 0 0 24px;
+      }
+      p {
+        margin: 0 0 20px;
+      }
+      code {
+        color: #b6dffa;
+        font: inherit;
+      }
+      .instructions {
+        color: #c1cad0;
+      }
+      .folder-label {
+        display: block;
+        margin: 30px 0 8px;
+      }
+      .folder {
+        display: flex;
+        gap: 8px;
+      }
+      input {
+        background: #20252a;
+        border: 1px solid #4a555e;
+        border-radius: 5px;
+        color: #f1f4f6;
+        font: inherit;
+        min-width: 0;
+        padding: 10px 12px;
+        width: 100%;
+      }
+      button {
+        background: #009df7;
+        border: 0;
+        border-radius: 5px;
+        color: white;
+        cursor: pointer;
+        flex: 0 0 auto;
+        font: inherit;
+        font-weight: 600;
+        padding: 10px 16px;
+      }
+      button:hover {
+        background: #28adfa;
+      }
+      select {
+        background: transparent;
+        border: 0;
+        color: #9aa5ae;
+        font: inherit;
+        max-width: 110px;
+        padding: 6px;
+      }
+      option {
+        background: #20252a;
+        color: #f1f4f6;
+      }
+      .result {
+        color: #9aa5ae;
+        min-height: 26px;
+        margin: 8px 0 30px;
+      }
+      a {
+        color: #66c4fc;
+        text-underline-offset: 3px;
+      }
+      .last {
+        color: #9aa5ae;
+      }
+      @media (max-width: 420px) {
+        body {
+          padding-inline: 18px;
+        }
+        header {
+          margin-bottom: 44px;
+        }
+        .folder {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <img src="extension/icons/icon-32.png" alt="" />qcatch
+      </div>
+      <select id="language" aria-label="Language">
+        <option value="ru">Русский</option>
+        <option value="en">English</option>
+      </select>
+    </header>
+    <main>
+      <h1 data-text="heading"></h1>
+      <div class="instructions">
+        <p>
+          <span data-text="open"></span> <code>edge://extensions</code>
+          <span data-text="or"></span> <code>chrome://extensions</code>.
+        </p>
+        <p>
+          <span data-text="enable"></span>
+          <strong data-text="developer"></strong><span data-text="then"></span>
+          <strong data-text="unpacked"></strong>.
+        </p>
+      </div>
+      <label class="folder-label" for="path" data-text="folder"></label>
+      <div class="folder">
+        <input id="path" readonly /><button
+          id="copy"
+          type="button"
+          data-text="copy"
+        ></button>
+      </div>
+      <p class="result" id="result" role="status"></p>
+      <p class="last">
+        <span data-text="pin"></span>
+        <a href="https://qbutt-org.github.io/qplay/" data-text="player"></a>.
+      </p>
+    </main>
+    <script>
+      const messages = {
+        ru: {
+          heading: "Подключить qcatch",
+          open: "Откройте в браузере",
+          or: "или",
+          enable: "Включите",
+          developer: "Режим разработчика",
+          then: " и нажмите",
+          unpacked: "Загрузить распакованное",
+          folder: "Выберите эту папку",
+          copy: "Копировать путь",
+          copied: "Путь скопирован",
+          failed: "Скопируйте выделенный путь вручную.",
+          pin: "Закрепите qcatch на панели браузера. Для просмотра видео установите",
+          player: "qplay",
+        },
+        en: {
+          heading: "Connect qcatch",
+          open: "Open",
+          or: "or",
+          enable: "Enable",
+          developer: "Developer mode",
+          then: " and click",
+          unpacked: "Load unpacked",
+          folder: "Select this folder",
+          copy: "Copy path",
+          copied: "Path copied",
+          failed: "Copy the selected path manually.",
+          pin: "Pin qcatch to the browser toolbar. To watch videos, install",
+          player: "qplay",
+        },
+      };
+      const path = decodeURIComponent(
+        new URL("extension/", location.href).pathname,
+      )
+        .replace(/^\//, "")
+        .replaceAll("/", "\\");
+      const pathField = document.getElementById("path");
+      pathField.value = path;
+      const languageSelect = document.getElementById("language");
+      let language = navigator.languages[0]?.toLowerCase().startsWith("ru")
+        ? "ru"
+        : "en";
+      try {
+        const saved = localStorage.getItem("qcatch-language");
+        if (saved === "ru" || saved === "en") language = saved;
+      } catch {}
+      function applyLanguage() {
+        document.documentElement.lang = language;
+        document.title = messages[language].heading;
+        languageSelect.value = language;
+        languageSelect.setAttribute(
+          "aria-label",
+          language === "ru" ? "Язык" : "Language",
+        );
+        for (const element of document.querySelectorAll("[data-text]"))
+          element.textContent = messages[language][element.dataset.text];
+        document.getElementById("result").textContent = "";
+      }
+      languageSelect.onchange = () => {
+        language = languageSelect.value;
+        try {
+          localStorage.setItem("qcatch-language", language);
+        } catch {}
+        applyLanguage();
+      };
+      document.getElementById("copy").onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(path);
+          document.getElementById("result").textContent =
+            messages[language].copied;
+        } catch {
+          pathField.select();
+          document.getElementById("result").textContent =
+            messages[language].failed;
+        }
+      };
+      applyLanguage();
+    </script>
+  </body>
+</html>

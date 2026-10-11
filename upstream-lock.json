@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "sources": {
+    "cobalt": {
+      "repository": "https://github.com/imputnet/cobalt",
+      "revision": "a636575b09de1fc55d9b8cd98cac88f5f2f16b42",
+      "scope": "Twitter extraction and GIF filter, adapted in src/twitter/twitter.js and src/twitter/gif-converter.js.",
+      "files": [
+        "api/src/processing/services/twitter.js",
+        "api/src/stream/ffmpeg.js"
+      ]
+    },
+    "qbuttBrowserConnection": {
+      "repository": "https://github.com/qbutt-org/qbutt",
+      "revision": "12fbe1a904c8b3c98bec3dd84f503a6072233de0",
+      "scope": "Exact browser source resolver and bounded native messaging protocol."
+    }
+  },
+  "build": {
+    "innoSetup": "6.7.3",
+    "extensionDependencies": "bun.lock",
+    "nativeDependencies": "bridge/Cargo.lock"
+  },
+  "redistribution": {
+    "ffmpegWasm": {
+      "coreVersion": "0.12.10",
+      "wrapperVersion": "0.12.15",
+      "sourceRevision": "71aa99d37c02a7b4c435275ca9ef50e612f6efa1",
+      "wasmSha256": "9f57947a5bd530d8f00c5b3f2cb2a3492faa7e5d823315342d6a8656d0a6b7b7",
+      "sourceLock": "licenses/ffmpeg-wasm-sources.json",
+      "buildRecipe": "licenses/ffmpeg-wasm-rebuild.sh"
+    },
+    "mediabunny": {
+      "version": "1.52.3",
+      "sourceLock": "licenses/mediabunny-source.json",
+      "localPatch": "patches/mediabunny@1.52.3.patch"
+    },
+    "native": {
+      "dependencyLock": "bridge/Cargo.lock",
+      "licenseGenerator": "scripts/licenses.ts",
+      "target": "x86_64-pc-windows-msvc"
+    },
+    "correspondingSourceAsset": "qcatch-1.0.0-runtime-sources.zip",
+    "correspondingSourceUrl": "https://github.com/qbutt-org/qcatch/releases/download/v1.0.0-sources/qcatch-1.0.0-runtime-sources.zip"
+  }
+}

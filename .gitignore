@@ -1,0 +1,8 @@
+dist/
+node_modules/
+artifacts/
+.playwright-cli/
+*.pem
+*.log
+.DS_Store
+Thumbs.db

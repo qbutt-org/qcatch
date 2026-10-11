@@ -1,0 +1,15 @@
+{
+  "name": "Mediabunny",
+  "repository": "https://github.com/Vanilagy/mediabunny",
+  "revision": "1.52.3",
+  "url": "https://registry.npmjs.org/mediabunny/-/mediabunny-1.52.3.tgz",
+  "file": "mediabunny-1.52.3.tgz",
+  "sha256": "83212e9bb7c174f8ebf66447862c3136aea0f1253f4d11a7eb4413eec3da94bb",
+  "integrity": "sha512-rMGwH5fykDCSA55LG9aWkE433wwHrycq3J5mRf+djBnHBZzmJGvIwg6Qfcfr4rRkzkmrdmewxQozLkOM1H1C6Q==",
+  "localPatch": {
+    "path": "patches/mediabunny@1.52.3.patch",
+    "sha256": "efd93a8f2f11f83e7aed514191d8ff6bf9b6dfb7147840622e6f82cf50d55ed8",
+    "license": "MPL-2.0",
+    "scope": "Matroska WebVTT codec identifier and identifier/settings/text cue payload in upstream TypeScript and its distributed ES modules."
+  }
+}

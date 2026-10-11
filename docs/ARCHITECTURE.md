@@ -1,0 +1,92 @@
+# Архитектура
+
+## Поток данных
+
+```text
+page fetch/XHR/media
+        │
+        ▼
+MAIN content script (document_start, all_frames)
+        │ window.postMessage: только media metadata / небольшой manifest body
+        ▼
+isolated content bridge ── YummyAnime adapter
+        │ chrome.runtime
+        ▼
+MV3 service worker ── chrome.storage.session / webRequest / DNR / queue
+        │ job metadata, без media bytes
+        ▼
+offscreen document ── fetch + Mediabunny + OPFS ── chrome.downloads
+```
+
+## Почему два content script
+
+MAIN world видит оригинальные `window.fetch` и `XMLHttpRequest` плеера, включая декодированные Kodik URL и Alloha-запросы. У MAIN world нет доступа к extension API. Isolated bridge имеет `chrome.runtime`, но не видит подменённые page-owned globals. `window.postMessage` оставляет эту границу явной и не требует внедрения script tag.
+
+Оба script запускаются с `document_start` и `all_frames`, потому что большинство плееров живёт в cross-origin iframe. Content scripts собираются без code splitting: manifest content scripts не могут импортировать общий ESM chunk.
+
+## Состояние
+
+Service worker — единственный владелец состояния вкладки. Мутации сериализуются по `tabId`, чтобы одновременные события от nested frames не перетирали друг друга. Сегменты дедуплицируются по provider/origin/directory: для replay нужен образец headers, а не тысячи записей `seg-123.ts`.
+
+Состояние, настройки popup и очередь живут в `chrome.storage.session`. Они переживают закрытие popup и suspension service worker, но не перезапуск browser session. Привязанные к вкладке capture и настройки удаляются на `tabs.onRemoved`; очередь продолжает работу в offscreen document независимо от popup.
+
+## Повторение CDN-запроса
+
+Обычные custom headers передаются через `fetch` только исходному origin конкретной дорожки. Для переходов на другой origin приватные заголовки удаляются; редиректы запросов с Authorization или custom X-заголовками отклоняются, чтобы браузер не передал их другому серверу. Forbidden request headers (`Referer`, `Origin`) на время одного активного job задаются session DNR rules, ограниченными точными origin источников. Authorization и X-заголовки никогда не устанавливаются глобальным правилом. Offscreen queue выполняет jobs последовательно.
+
+## Сборка контейнера
+
+Для HLS offscreen сначала выбирает максимальный video variant основного источника и потоково складывает его сегменты в OPFS. У дополнительных озвучек выбирается отдельная audio rendition либо самый лёгкий combined variant: его video затем отбрасывается, поэтому одинаковая картинка не попадает в итоговый файл несколько раз. После staging Mediabunny без перекодирования переносит совместимые encoded packets в `MkvOutputFormat` или `Mp4OutputFormat`. Для DASH adapter разбирает статический MPD `SegmentTemplate`, выбирает лучшее video representation и создаёт in-memory HLS master/media playlists с абсолютными CMAF segment URL. Media bytes всегда приходят напрямую с CDN.
+
+Роль входа задаёт назначение: `media` сохраняет основное видео вместе со встроенным аудио, `audio` берёт только звуковые дорожки дополнительного источника. Язык и название не доказывают идентичность аудио, поэтому выбранные дорожки по этим признакам не удаляются.
+
+`StreamTarget` пишет random-access chunks в OPFS `FileSystemWritableFileStream`. После finalize offscreen создаёт object URL на disk-backed File и передаёт его `chrome.downloads`. OPFS-временный файл удаляется после завершения или ошибки.
+
+## Субтитры
+
+DOM `<track>` и `.vtt` responses становятся отдельными `TextSubtitleSource("webvtt")`. Точное содержимое каждой дорожки хешируется, поэтому одинаковые VTT от разных probe не дублируются. Язык, label, default и forced disposition переносятся в контейнер. Hardcode/burn-in не выполняется, чтобы не перекодировать видео и сохранить выбор дорожек.
+
+## YummyAnime batch
+
+Top-frame adapter находит React combobox, текущий player iframe и номера серий. Для Alloha он читает доступные переводы и серии из встроенного `fileList`, не меняя пользовательский выбор озвучки. Background сразу создаёт placeholder job для каждой выбранной серии, поэтому popup показывает полную очередь до сетевой подготовки. Offscreen coordinator последовательно просит top frame поднять provider iframe для каждой доступной озвучки и набора субтитров. Probe заранее выставляет максимальное качество Alloha, а background строит один job: одно лучшее video, все выбранные audio и все уникальные VTT. Это сохраняет site authorization, не требует хардкодить token API и не блокирует popup на время batch preparation.
+
+## Twitter/X action
+
+На страницах конкретных постов toolbar action начинает загрузку. Для Twitter/X service worker использует cobalt-derived syndication flow, выбирает максимальный MP4 bitrate и запускает загрузку всех медиа поста. Looping MP4 конвертируется в GIF в том же offscreen document через ffmpeg.wasm; настоящий GIF повторно не конвертируется.
+
+Расширение не внедряет собственный UI в DOM сайтов.
+
+## Действия для отдельных сервисов
+
+`src/shared/platforms.ts` распознаёт ссылки на отдельные посты, клипы, каналы Twitch и треки. Общая панель показывает действие и существующие очереди. TikTok video, Reddit, Twitch clips, SoundCloud и ссылки Яндекс Музыки `album/…/track/…` передаются локальному yt-dlp через `/services/jobs`; Twitch live использует `/services/play` и тот же независимый playback worker. У каждого native job сохраняется публичная ссылка; cookies и приватная SoundCloud share-ссылка остаются только в памяти задачи и временном jar. Metadata отдельного media item сохраняется во временный info JSON и передаётся через `--load-info-json`, поэтому скачивание не выбирает пост повторно.
+
+Выбор сохраняет максимальную площадь видео и битрейт, отдельное аудио при необходимости объединяется в MKV; аудиотреки сохраняют полученный формат. У Twitch clips кодеки могут отсутствовать: video определяется известными размерами, площадь дополняется исходным aspect ratio, а известная высота проверяется отдельно от ширины. Для video-only TikTok звук берётся из muxed media того же поста; `music.playUrl` и заведомо непроигрываемый ByteVC2 не выбираются. Доступные языки softsubs встраиваются в MKV. До публикации ffprobe проверяет длительность, дорожки, число языков субтитров и разрешение. Preview-форматы не выбираются. Все элементы поста скачиваются и проверяются до публикации на Desktop, отмена удаляет staging и временные данные. Неизвестная длительность или единственный Reddit fallback без подтверждённых остальных дорожек дают явный отказ вместо неподтверждённой полной копии.
+
+Instagram media-info, Pinterest PinResource, TikTok photo state и именованные VK `data-audio` читаются в MAIN world открытой страницы с её сессией. Ответ должен содержать точный ID выбранного поста или трека. Reddit post JSON с совпадающими `kind`, `id` и `name` разрешает оригинальный `i.redd.it/*.gif`; preview-изображения и MP4-конверсия GIF не выбираются. Фотографии/GIF передаются браузеру; видео, HLS и аудио используют существующую offscreen queue. Частичный запуск нескольких загрузок сообщает фактическое число и ошибку оставшихся. Внешний видеопин или недоступный video URL дают ошибку вместо скачивания обложки. Для `/track/…` Яндекс Музыки принимается только canonical album/track с тем же track ID. Отсутствующая полная ссылка VK не восстанавливается из предполагаемого внутреннего player state.
+
+## YouTube и YouTube Music
+
+Popup определяет видео по URL активной вкладки, включая SPA-переходы, и монтирует отдельную панель выбора формата и времени. `src/shared/youtube.ts` описывает сообщения и нормализацию URL. `src/background/youtube.ts` принимает команды только от внутреннего popup, хранит выбор в `chrome.storage.session` по вкладке и видео и обращается к `127.0.0.1:47832`. Публичный ключ в manifest закрепляет один ID расширения; закрытый ключ для сборки не нужен.
+
+`bridge/` — отдельный Rust Windows EXE. Inno Setup владеет установкой, автозапуском и регистрацией native host; Rust владеет HTTP API, Known Folders, приватными yt-dlp/FFmpeg/Deno и загрузками. HTTP слушает только loopback, проверяет Host, extension Origin и обязательный заголовок запроса. Обычные веб-страницы не получают доступ к API. Загрузка и установка официальных инструментов проверяются по SHA256; обновление yt-dlp сериализовано с работой инструментов.
+
+Метаданные подготавливаются асинхронно, запросы popup короткие. Очередь и дочерние процессы принадлежат помощнику, поэтому закрытие popup и suspension service worker не прерывают загрузку. Для видео выбирается максимальная площадь кадра, затем битрейт. Точные отрезки обрабатываются FFmpeg, MP3 перекодируется из аудио. На реальный Windows Desktop публикуется только готовый файл с уникальным именем. Отмена завершает принадлежащее загрузке дерево процессов.
+
+Для открытия YouTube в qplay background снимает `video.currentTime` с исходной вкладки и проверяет, что URL видео не изменился. `/play` запускает установленный qplay с этой позицией и приватными yt-dlp/Deno. Универсальный `/play-media` передаёт точный выбранный поток, аудио, субтитры и свежие browser cookies в Netscape-файле с исходными domain/path/secure/hostOnly. При отсутствии явной позиции qplay сам применяет resume для точной ссылки; qcatch не угадывает соответствие подписанных CDN URL. Cookies не становятся общим HTTP-заголовком плеера. Потоки, требующие приватных Authorization/X-заголовков, пока доступны через загрузку qcatch.
+
+Отдельный процесс `--playback` получает ограниченный запрос через stdin и владеет cookie jar до выхода qplay. Его образ с именем по SHA-256 находится вне папки установки, а файл lease открыт эксклюзивно. Перезапуск, переустановка или удаление HTTP-помощника не должны прерывать этот процесс; следующий старт удаляет только неактивные jars и образы. qplay находится через Windows App Paths и сам владеет конфигурацией. Воспроизведение не добавляется в очередь загрузок.
+
+## Подключение к qbutt
+
+Это то же расширение, а не отдельная embedded-копия. `src/connection/` исполняет cookies/fetch/resolve/cancel команды qbutt с явной проверкой серии, плеера и frame. `fetch` возвращает ограниченный HTTP-ответ; структуру браузерных проверок в HTML разбирают провайдеры qbutt. Единственный MAIN sniffer обслуживает и обычный popup, и авторизованный resolver. Native host `org.qbutt.qcatch` запускает `qcatch.exe`, который передаёт length-prefixed JSON размером до 768 KiB через защищённый current-user pipe qbutt. Cookies и медиаданные не проходят через внешние серверы проекта.
+
+Кнопки передачи создают `qbutt://capture` с постоянным адресом страницы, действием и непрозрачным capture ID. Сам поток и заголовки остаются в `chrome.storage.session`. Повторное разрешение проверяет страницу, конкретный frame/document и выбранный источник. После закрытия вкладки, изменения документа или истечения десяти минут требуется новая передача. Другой iframe, серия или первый найденный поток не выбираются автоматически.
+
+Текущий контракт qbutt принимает одну внешнюю аудиодорожку и общий набор заголовков основного потока. Передача нескольких выбранных дорожек отклоняется с просьбой выбрать одну. Если дополнительная дорожка требует приватных заголовков или cookies другого origin, qcatch предлагает самостоятельную загрузку вместо передачи, которая потеряла бы авторизацию. Самостоятельная загрузка qcatch и прямое открытие в qplay сохраняют все выбранные дорожки.
+
+## Неподдерживаемые сценарии
+
+- DRM / DASH `ContentProtection` / encrypted HLS;
+- live DASH и MPD без `SegmentTemplate`;
+- hardcode субтитров и перекодирование несовместимых codecs в универсальном browser-only flow;
+- cloud relay, удалённый downloader или чтение файлов браузерного профиля.

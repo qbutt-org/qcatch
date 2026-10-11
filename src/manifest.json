@@ -1,0 +1,83 @@
+{
+  "manifest_version": 3,
+  "name": "qcatch",
+  "description": "__MSG_extensionDescription__",
+  "default_locale": "en",
+  "version": "1.0.0",
+  "minimum_chrome_version": "127",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    },
+    "default_title": "qcatch"
+  },
+  "background": {
+    "service_worker": "background/index.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "all_frames": true,
+      "exclude_matches": [
+        "https://chat.openai.com/*",
+        "https://chatgpt.com/*",
+        "https://*.chatgpt.com/*"
+      ],
+      "js": [
+        "content/sniffer.js"
+      ],
+      "match_about_blank": true,
+      "matches": [
+        "<all_urls>"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "all_frames": true,
+      "js": [
+        "content/bridge.js"
+      ],
+      "match_about_blank": true,
+      "matches": [
+        "<all_urls>"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "permissions": [
+    "cookies",
+    "declarativeNetRequest",
+    "downloads",
+    "notifications",
+    "offscreen",
+    "scripting",
+    "storage",
+    "tabs",
+    "webRequest",
+    "nativeMessaging",
+    "alarms"
+  ],
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+X"
+      },
+      "description": "__MSG_actionDescription__"
+    }
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwK1Tcx1kpdf48qnDI5Pm9v9df1K4UxUOaZNoK5vtpCxQbKpwWyz2Rg+GQcX/GLLohi/QojXV7EvuTYlmxzVrEYFP+tRgH6yvnEBLyWcJ85chqlRyKxJ2u7qc1aIk8XQGF++5+yIAtpFp/I6oxaJGUK++e+Hzx4L5E9Psfc+OaRberuaOgFidC5nIXMarzWtT+HvrlGNlLTTrSuFsjQHCWJs9t/e+H0UR3HtkjdgnuBn5zskugSmtM3WzoYSz8yCH18vS2S9ZJl8zgaw5PbGl+jSeTWiHYVmw2f9YoqoEHQQa1E4m89t2SMSaBSmFzXqyw20a/ZtxUYuIqK82QvSfbQIDAQAB"
+}

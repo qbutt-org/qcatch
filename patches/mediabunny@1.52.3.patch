@@ -1,0 +1,63 @@
+diff --git a/dist/modules/src/matroska/ebml.js b/dist/modules/src/matroska/ebml.js
+index 42eeea93c04d41ad4441fa576bb53a76c165f1a5..39f092c9af0cf7b8b4c0e80d17b2efb45c3412df 100644
+--- a/dist/modules/src/matroska/ebml.js
++++ b/dist/modules/src/matroska/ebml.js
+@@ -673,7 +673,7 @@ export const CODEC_STRING_MAP = {
+     'pcm-s32be': 'A_PCM/INT/BIG',
+     'pcm-f32': 'A_PCM/FLOAT/IEEE',
+     'pcm-f64': 'A_PCM/FLOAT/IEEE',
+-    'webvtt': 'S_TEXT/WEBVTT',
++    'webvtt': 'D_WEBVTT/SUBTITLES',
+ };
+ export function assertDefinedSize(size) {
+     if (size === undefined) {
+diff --git a/dist/modules/src/matroska/matroska-muxer.js b/dist/modules/src/matroska/matroska-muxer.js
+index 5da8c0adab867d6ed31bf0203154920c485e2754..fc798664a8f7cd158fafa41c01310969140d5f1b 100644
+--- a/dist/modules/src/matroska/matroska-muxer.js
++++ b/dist/modules/src/matroska/matroska-muxer.js
+@@ -778,9 +778,8 @@ export class MatroskaMuxer extends Muxer {
+                 const offsetTime = time - timestampMs;
+                 return `<${formatSubtitleTimestamp(offsetTime)}>`;
+             });
+-            const body = textEncoder.encode(bodyText);
+-            const additions = `${cue.settings ?? ''}\n${cue.identifier ?? ''}\n${cue.notes ?? ''}`;
+-            const subtitleChunk = this.createInternalChunk(body, cue.timestamp, cue.duration, 'key', additions.trim() ? textEncoder.encode(additions) : null);
++            const body = textEncoder.encode(`${cue.identifier ?? ''}\n${cue.settings ?? ''}\n${bodyText}`);
++            const subtitleChunk = this.createInternalChunk(body, cue.timestamp, cue.duration, 'key');
+             trackData.chunkQueue.push(subtitleChunk);
+             await this.interleaveChunks();
+         }
+diff --git a/src/matroska/ebml.ts b/src/matroska/ebml.ts
+index 08a07c7f2b45959f0c67c5315bfb35496aa2abbb..953b768d16708e4426adcc863626c36c3bb2b560 100644
+--- a/src/matroska/ebml.ts
++++ b/src/matroska/ebml.ts
+@@ -760,7 +760,7 @@ export const CODEC_STRING_MAP: Partial<Record<MediaCodec, string>> = {
+ 	'pcm-f32': 'A_PCM/FLOAT/IEEE',
+ 	'pcm-f64': 'A_PCM/FLOAT/IEEE',
+ 
+-	'webvtt': 'S_TEXT/WEBVTT',
++	'webvtt': 'D_WEBVTT/SUBTITLES',
+ };
+ 
+ export function assertDefinedSize(size: number | undefined): asserts size is number {
+diff --git a/src/matroska/matroska-muxer.ts b/src/matroska/matroska-muxer.ts
+index 468a356480a01d55bbd71af8640a497a26d11aad..44b2f6af7a4263e3a6b3c82c3fbb4451392a5e78 100644
+--- a/src/matroska/matroska-muxer.ts
++++ b/src/matroska/matroska-muxer.ts
+@@ -984,15 +984,13 @@ export class MatroskaMuxer extends Muxer {
+ 				return `<${formatSubtitleTimestamp(offsetTime)}>`;
+ 			});
+ 
+-			const body = textEncoder.encode(bodyText);
+-			const additions = `${cue.settings ?? ''}\n${cue.identifier ?? ''}\n${cue.notes ?? ''}`;
++			const body = textEncoder.encode(`${cue.identifier ?? ''}\n${cue.settings ?? ''}\n${bodyText}`);
+ 
+ 			const subtitleChunk = this.createInternalChunk(
+ 				body,
+ 				cue.timestamp,
+ 				cue.duration,
+ 				'key',
+-				additions.trim() ? textEncoder.encode(additions) : null,
+ 			);
+ 
+ 			trackData.chunkQueue.push(subtitleChunk);
