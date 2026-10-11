@@ -2,6 +2,7 @@ import { publicUrl, type Selection } from "../shared/connection.ts";
 import { hasBrowserCheck } from "./challenge.ts";
 import { playableDash } from "./dash.ts";
 import { CAPTURE_FRAME_NAME } from "./media.ts";
+import { readVkSearch } from "./vk-search.ts";
 
 const wait = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 const documentId = crypto.randomUUID();
@@ -122,6 +123,9 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
         media: [...document.querySelectorAll<HTMLMediaElement>("video,audio")].map((media) => media.currentSrc || media.src).filter(Boolean).sort() });
     if (message?.type === "ready") respond({ ready: documentReady, url: location.href });
     if (message?.type === "problem") respond(pageProblem() ?? {});
+    if (message?.type === "vk-search" && typeof message.query === "string") {
+        respond({ url: location.href, ...(pageProblem() ?? readVkSearch(document, message.query)) });
+    }
     if (message?.type === "frame:mount" && typeof message.url === "string") {
         const problem = pageProblem();
         if (problem) respond(problem);

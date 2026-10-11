@@ -123,7 +123,14 @@ async function readPageAssets(
           throw new Error(
             "The source did not return this media. Open it in the site's player and retry.",
           );
-        return { url, kind: video ? ("video" as const) : ("photo" as const) };
+        const duration = entry.video_duration;
+        return {
+          url,
+          kind: video ? ("video" as const) : ("photo" as const),
+          ...(video && Number.isFinite(duration) && duration > 0
+            ? { duration }
+            : {}),
+        };
       });
       result = {
         title: item.caption?.text?.slice(0, 180) || `Instagram ${reference.id}`,

@@ -1,26 +1,46 @@
-[Русский](README.md) / **English**
+<p align="center">
+  <a href="README.md">Русский</a> / <strong>English</strong>
+</p>
 
-# qcatch
+<h1 align="center">qcatch</h1>
 
-[![Windows x64](https://img.shields.io/badge/Windows-x64-0078d4)](https://qbutt-org.github.io/qcatch/en/)
-[![Latest release](https://img.shields.io/github/v/release/qbutt-org/qcatch?label=release&color=009df7)](https://github.com/qbutt-org/qcatch/releases/latest)
-[![AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+<p align="center">
+  A browser extension for downloading videos.
+</p>
 
-A browser extension for downloading videos.
+<p align="center">
+  <a href="https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-setup.exe">
+    <img alt="Download qcatch for Windows" src="https://img.shields.io/badge/DOWNLOAD-Windows-009df7?style=for-the-badge">
+  </a>
+  <a href="https://github.com/qbutt-org/qcatch/releases">
+    <img alt="All releases" src="https://img.shields.io/badge/RELEASES-all_versions-24292f?style=for-the-badge&amp;logo=github&amp;logoColor=white">
+  </a>
+</p>
 
-[![Download for Windows](docs/assets/download.en.svg)](https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-setup.exe)
+<p align="center">
+  <img alt="Windows x64" src="https://img.shields.io/badge/Windows-x64-0078d4?style=flat-square">
+  <a href="https://github.com/qbutt-org/qcatch/releases/latest">
+    <img alt="Latest release" src="https://img.shields.io/github/v/release/qbutt-org/qcatch?label=release&amp;color=009df7&amp;style=flat-square">
+  </a>
+  <a href="LICENSE">
+    <img alt="AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square">
+  </a>
+</p>
 
-[Website](https://qbutt-org.github.io/qcatch/en/) / [All downloads](https://github.com/qbutt-org/qcatch/releases/latest) / [What's new](https://github.com/qbutt-org/qcatch/releases)
+<p align="center">
+  <a href="https://qbutt-org.github.io/qcatch/en/">Website</a> /
+  <a href="https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-portable.zip">Portable</a>
+</p>
 
 ## Installation
 
-Run **qcatch-setup.exe**. The installer prepares the Windows helper and extension folder.
+Run **qcatch-setup.exe**. After installation, setup instructions open.
 
 The extension currently requires manual installation because there is no published store listing:
 
 1. Open `edge://extensions` in Microsoft Edge or `chrome://extensions` in Google Chrome.
 2. Enable **Developer mode** and click **Load unpacked**.
-3. Select the extension folder opened by the installer.
+3. Select the extension folder shown in the instructions.
 
 Once connected, pin the qcatch icon to the browser toolbar. If the source page was already open before installation, refresh it.
 
@@ -30,11 +50,9 @@ The release page also offers a portable version.
 
 Open a page with video and start playback. Click the qcatch icon to see detected streams and tracks. Choose a source and save the video. Keep the source tab open until the download finishes, since the temporary URL or website session may expire.
 
-qcatch supports direct files, HLS and DASH, separate audio, and text subtitles. Compatible tracks are combined into MP4 or MKV without re-encoding the video. YummyAnime supports episode selection and batch downloads.
+qcatch supports direct files, HLS and DASH, separate audio, and text subtitles. Compatible tracks are combined into MP4 or MKV without re-encoding the video.
 
-YouTube and YouTube Music use the bundled Windows helper: save video as MP4, audio as MP3, or a selected time range. The helper saves finished files to the Desktop.
-
-See the [supported sites list](docs/SUPPORTED-SITES.md) for limitations. DRM-protected video is not supported.
+See [stream detection and site notes](docs/SUPPORTED-SITES.md). DRM-protected video is not supported.
 
 ## Watch in qplay
 

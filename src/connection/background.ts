@@ -2,6 +2,7 @@ import { MAX_MESSAGE_BYTES, NATIVE_HOST, publicUrl, type BrowserCommand, type Br
 import { bestHlsVariant, hlsIsEncrypted, parseHlsMaster } from "./hls.ts";
 import { classifyMedia, type Capture } from "./media.ts";
 import { resolveCapture } from "../background/integration.ts";
+import { vkSearchUrl } from "./vk-search.ts";
 
 interface Frame {
     url: string;
@@ -23,6 +24,7 @@ interface Probe {
 const probes = new Map<number, Probe>();
 const operations = new Map<number, AbortController>();
 let port: chrome.runtime.Port | undefined;
+let searchingVk = false;
 const delay = (milliseconds: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
     signal?.throwIfAborted();
     const timer = setTimeout(() => { signal?.removeEventListener("abort", abort); resolve(); }, milliseconds);
@@ -70,7 +72,8 @@ function connect(): void {
             operations.clear();
         });
         connection.onMessage.addListener((command) => void dispatch(command, connection));
-        connection.postMessage({ type: "hello", browser: browserId(), version: 1, userAgent: navigator.userAgent });
+        connection.postMessage({ type: "hello", browser: browserId(), version: 1, userAgent: navigator.userAgent,
+            capabilities: ["vk-search"] });
     } catch { port = undefined; }
 }
 
@@ -82,6 +85,8 @@ async function cookies(url: string) {
         path: cookie.path,
         secure: cookie.secure,
         hostOnly: cookie.hostOnly,
+        httpOnly: cookie.httpOnly,
+        sameSite: cookie.sameSite,
         ...(cookie.expirationDate === undefined ? {} : { expirationDate: cookie.expirationDate }),
     }));
 }
@@ -113,11 +118,80 @@ async function commandTab(tabId: number, message: unknown, frameId = 0): Promise
     return chrome.tabs.sendMessage(tabId, message, { frameId });
 }
 
-async function backgroundTab(url: string): Promise<chrome.tabs.Tab> {
-    const windows = (await chrome.windows.getAll({ windowTypes: ["normal"] })).filter((window) => !window.incognito);
+function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        const abort = () => reject(signal.reason);
+        if (signal.aborted) abort();
+        else signal.addEventListener("abort", abort, { once: true });
+        operation.then(value => {
+            signal.removeEventListener("abort", abort);
+            resolve(value);
+        }, error => {
+            signal.removeEventListener("abort", abort);
+            reject(error);
+        });
+    });
+}
+
+async function backgroundTab(url: string, signal: AbortSignal): Promise<chrome.tabs.Tab> {
+    const windows = (await abortable(chrome.windows.getAll({ windowTypes: ["normal"] }), signal))
+        .filter(window => !window.incognito);
     const window = windows.find((candidate) => candidate.focused) ?? windows[0];
     if (window?.id === undefined) throw new SourceError("browser_required", "Откройте обычное окно выбранного браузера и повторите действие.");
+    signal.throwIfAborted();
     return chrome.tabs.create({ url, active: false, windowId: window.id });
+}
+
+async function searchVk(command: BrowserCommand, signal: AbortSignal) {
+    const url = vkSearchUrl(command.query!);
+    if (command.url !== url) throw new Error("Invalid VK search address.");
+    if (searchingVk) throw new SourceError("browser_busy", "VK search is already running. Try again in a few seconds.");
+    searchingVk = true;
+    const bounded = AbortSignal.any([signal, AbortSignal.timeout(15_000)]);
+    let opening: Promise<chrome.tabs.Tab> | undefined;
+    let tabId: number | undefined;
+    try {
+        bounded.throwIfAborted();
+        opening = backgroundTab("about:blank", bounded);
+        const tab = await abortable(opening, bounded);
+        tabId = tab.id;
+        bounded.throwIfAborted();
+        if (tabId === undefined) throw new Error("Could not open VK search in the background.");
+        await abortable(chrome.tabs.update(tabId, { muted: true, url }), bounded);
+        let previous = "";
+        let stable = 0;
+        while (true) {
+            bounded.throwIfAborted();
+            const current = await abortable(chrome.tabs.get(tabId), bounded);
+            if (current.url !== url) {
+                if (current.url !== "about:blank") throw new SourceError("browser_check_required", "Open VK Video, complete sign-in or verification, and search again.", url);
+                await delay(250, bounded);
+                continue;
+            }
+            const state = await abortable(commandTab(tabId, { type: "vk-search", query: command.query }), bounded)
+                .catch(() => undefined);
+            bounded.throwIfAborted();
+            if (state?.error) throw new SourceError(state.code || "browser_error", state.error, url);
+            if (state && state.url !== url) throw new SourceError("selected_content_changed", "VK changed the search page. Search again.", url);
+            const snapshot = state?.ready ? JSON.stringify(state.videos) : "";
+            stable = snapshot && snapshot === previous ? stable + 1 : 0;
+            previous = snapshot;
+            if (stable >= 2) return { query: command.query, videos: state.videos };
+            await delay(250, bounded);
+        }
+    } catch (error) {
+        if (!signal.aborted && bounded.aborted) {
+            throw new SourceError("browser_timeout", "VK search did not finish. Open VK Video and try again.", url);
+        }
+        throw error;
+    } finally {
+        const cleanup = opening
+            ? opening.then(tab => tab.id === undefined ? undefined : chrome.tabs.remove(tab.id)).catch(() => undefined)
+            : Promise.resolve();
+        // Keep ownership until a late create/remove settles, even when the reply is canceled.
+        void cleanup.then(() => { searchingVk = false; });
+        await abortable(cleanup, bounded).catch(() => undefined);
+    }
 }
 
 async function commandFrame(probe: Probe, message: unknown): Promise<any> {
@@ -201,7 +275,7 @@ async function resolveFile(command: BrowserCommand, controller: AbortController)
         `Выбранный источник вернул HTTP ${response.status}. Откройте источник и выберите доступное зеркало.`, sourceUrl);
     publicUrl(response.url);
     const body = await boundedText(response);
-    const tab = await backgroundTab(chrome.runtime.getURL("connection/parser.html"));
+    const tab = await backgroundTab(chrome.runtime.getURL("connection/parser.html"), controller.signal);
     if (tab.id === undefined) throw new Error("Не удалось открыть источник в фоне.");
     try {
         await loaded(tab.id, controller.signal);
@@ -323,7 +397,7 @@ async function resolve(command: BrowserCommand, controller: AbortController) {
     const sourceUrl = publicUrl(command.url!);
     const referrer = command.referrer ? publicUrl(command.referrer) : sourceUrl;
     // Create blank, mute, then navigate: background player audio cannot escape.
-    const tab = await backgroundTab("about:blank");
+    const tab = await backgroundTab("about:blank", controller.signal);
     if (tab.id === undefined) throw new Error("Не удалось открыть плеер в фоне.");
     const page: Frame = { id: 0, url: referrer };
     const probe: Probe = { tabId: tab.id, page, selected: page, resources: new Map(), headers: new Map(), controller, ready: false };
@@ -456,7 +530,7 @@ try {
 async function dispatch(value: unknown, connection: chrome.runtime.Port): Promise<void> {
     if (connection !== port || !value || typeof value !== "object") return;
     const command = value as BrowserCommand;
-    if (!Number.isSafeInteger(command.id) || !["cookies", "fetch", "resolve", "cancel"].includes(command.method)) return;
+    if (!Number.isSafeInteger(command.id) || !["cookies", "fetch", "resolve", "vk-search", "cancel"].includes(command.method)) return;
     if (command.method === "cancel") { operations.get(command.id)?.abort(); return; }
     const controller = new AbortController();
     operations.set(command.id, controller);
@@ -466,6 +540,7 @@ async function dispatch(value: unknown, connection: chrome.runtime.Port): Promis
         publicUrl(command.url!);
         if (command.method === "cookies") response.result = await cookies(command.url!);
         if (command.method === "fetch") response.result = await browserFetch(command, controller.signal);
+        if (command.method === "vk-search") response.result = await searchVk(command, controller.signal);
         if (command.method === "resolve") response.result = command.kind && command.kind !== "video"
             ? await resolveFile(command, controller) : await resolve(command, controller);
         if (new TextEncoder().encode(JSON.stringify(response)).byteLength > MAX_MESSAGE_BYTES) throw new Error("Ответ источника слишком большой.");

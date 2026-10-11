@@ -10,10 +10,20 @@ export type Selection = {
     player?: string;
 };
 
+export interface VkSearchVideo {
+    id: string;
+    title: string;
+    url: string;
+    author?: string;
+    duration?: number;
+    cover?: string;
+}
+
 export interface BrowserCommand {
     id: number;
-    method: "cookies" | "fetch" | "resolve" | "cancel";
+    method: "cookies" | "fetch" | "resolve" | "vk-search" | "cancel";
     url?: string;
+    query?: string;
     init?: { method?: string; headers?: Record<string, string>; body?: string };
     selection?: Selection;
     kind?: "video" | "file" | "torrent";
