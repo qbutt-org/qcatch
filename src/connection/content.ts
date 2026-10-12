@@ -5,7 +5,10 @@ import { CAPTURE_FRAME_NAME } from "./media.ts";
 import { readVkSearch } from "./vk-search.ts";
 
 const wait = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-const documentId = crypto.randomUUID();
+const documentId = Array.from(
+    crypto.getRandomValues(new Uint8Array(16)),
+    (byte) => byte.toString(16).padStart(2, "0"),
+).join("");
 let capturing = false;
 let playerFrame: HTMLIFrameElement | undefined;
 let documentReady = document.readyState === "complete";
