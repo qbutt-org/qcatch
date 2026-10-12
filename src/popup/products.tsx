@@ -123,7 +123,23 @@ export function ProductActions(props: {
     <>
       <div class="product-actions">
         {health?.qplayInstalled && (
-          <button type="button" disabled={blocked("play")} onClick={() => perform("play")}>
+          <button
+            class="player-action"
+            type="button"
+            disabled={blocked("play")}
+            onClick={() => perform("play")}
+          >
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M7 4v16l13 -8l-13 -8" />
+            </svg>
             {current("play")?.status === "sent" ? t("Снова открыть в qplay")
               : t("Открыть в qplay")}
           </button>
@@ -134,14 +150,14 @@ export function ProductActions(props: {
           </button>
         )}
         {health?.qbuttInstalled && (
-          <>
+          <div class="qbutt-actions">
             <button type="button" disabled={blocked("watch")} onClick={() => perform("watch")}>
               {current("watch")?.status === "sent" ? t("Снова смотреть в qbutt") : t("Смотреть в qbutt")}
             </button>
             <button type="button" disabled={blocked("download")} onClick={() => perform("download")}>
               {current("download")?.status === "sent" ? t("Снова скачать через qbutt") : t("Скачать через qbutt")}
             </button>
-          </>
+          </div>
         )}
         {health && !health.qbuttInstalled && (
           <button type="button" onClick={() => install("qbutt")}>{t("Установить qbutt")}</button>

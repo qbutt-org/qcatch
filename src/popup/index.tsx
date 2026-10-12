@@ -463,6 +463,7 @@ function UniversalApp() {
 
   const found = primary.length > 0;
   const hasMedia = found || Boolean(yummy);
+  const selectedSource = primary.find((resource) => resource.id === sourceId);
   const yummyAudio =
     yummy?.sources.filter((source) => source.kind === "audio") ?? [];
   const yummySubtitles =
@@ -482,7 +483,7 @@ function UniversalApp() {
       ? t("Скачать {episodes}", {
           episodes: itemCount(language, episodes.size, "episodes"),
         })
-      : t("Скачать видео");
+      : t(selectedSource?.kind === "audio" ? "Скачать аудио" : "Скачать видео");
 
   return (
     <main class="shell">
@@ -498,13 +499,11 @@ function UniversalApp() {
       {ready && !hasMedia && (
         <section class="empty-state">
           <h1>{t(state ? "Запустите видео" : "Страница недоступна")}</h1>
-          <p>
-            {t(
-              state
-                ? "После начала воспроизведения здесь появятся качество, звук и субтитры."
-                : "Не удалось прочитать активную вкладку.",
-            )}
-          </p>
+          {state && (
+            <p>
+              {t("После начала воспроизведения здесь появятся качество, звук и субтитры.")}
+            </p>
+          )}
         </section>
       )}
 
@@ -649,6 +648,19 @@ function UniversalApp() {
               }
               onClick={() => void enqueue()}
             >
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2" />
+                <path d="M7 11l5 5l5 -5" />
+                <path d="M12 4l0 12" />
+              </svg>
               {enqueueLabel}
             </button>
           </div>

@@ -428,6 +428,11 @@ select:hover {
   min-height: 40px;
   padding: 10px 16px;
 }
+.download-panel .primary {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
+}
 .primary:hover {
   background: var(--accent-hover);
 }
@@ -438,19 +443,43 @@ select:hover {
   background: var(--control);
   color: #75818a;
 }
+.download-panel .primary svg,
+.player-action svg {
+  flex: 0 0 auto;
+  height: 17px;
+  width: 17px;
+}
 .product-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 20px;
-  margin-top: 12px;
+  gap: 4px 16px;
+  margin-top: 8px;
+}
+.qbutt-actions {
+  display: flex;
+  flex-basis: 100%;
+  gap: 16px;
 }
 .product-actions button {
+  align-items: center;
   background: transparent;
   border: 0;
   color: var(--muted);
   cursor: pointer;
-  min-height: 34px;
+  display: inline-flex;
+  min-height: 40px;
   padding: 5px 0;
+}
+.product-actions .player-action {
+  background: var(--control);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text);
+  gap: 6px;
+  padding: 8px 11px;
+}
+.product-actions .player-action:hover {
+  border-color: #66747f;
 }
 .product-actions button:hover {
   color: var(--text);

@@ -108,13 +108,13 @@ const english = {
   "Собираем дорожки…": "Preparing tracks…",
   "Добавляем…": "Adding…",
   "Скачать видео": "Download video",
+  "Скачать аудио": "Download audio",
   "Скачать {episodes}": "Download {episodes}",
   "Смотрим страницу": "Checking the page",
   "Запустите видео": "Play a video",
   "После начала воспроизведения здесь появятся качество, звук и субтитры.":
     "Available video, audio and subtitles will appear here.",
   "Страница недоступна": "Page unavailable",
-  "Не удалось прочитать активную вкладку.": "Could not read the active tab.",
   "Открываем страницу": "Opening page",
   "Выберите хотя бы одну серию": "Select at least one episode.",
   "Выберите хотя бы одну озвучку или субтитры":
