@@ -79,6 +79,7 @@ export async function copyExtensionLicenses(destination: string): Promise<void> 
     ["node_modules/@floating-ui/dom/LICENSE", "Floating-UI-dom-MIT.txt"],
     ["node_modules/@floating-ui/core/LICENSE", "Floating-UI-core-MIT.txt"],
     ["node_modules/@floating-ui/utils/LICENSE", "Floating-UI-utils-MIT.txt"],
+    ["licenses/Tabler-Icons-MIT.txt", "Tabler-Icons-MIT.txt"],
   ];
   await Promise.all(copies.map(([source, target]) => cp(join(root, source), join(destination, target))));
 }

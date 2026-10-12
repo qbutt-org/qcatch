@@ -11,6 +11,7 @@
   --line: #343a40;
   --muted: #9aa5ae;
   --text: #f1f4f6;
+  --chevron: url("../icons/chevron.svg");
 }
 
 * {
@@ -71,7 +72,7 @@ button:disabled {
 }
 .header {
   justify-content: space-between;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
 }
 .brand {
   gap: 9px;
@@ -85,21 +86,6 @@ button:disabled {
   font-weight: 650;
   letter-spacing: -0.025em;
 }
-.language-select {
-  background: transparent;
-  border-color: transparent;
-  color: var(--muted);
-  font-size: 12px;
-  height: 32px;
-  padding: 0 5px;
-  width: 88px;
-}
-.language-select:hover {
-  background: var(--control);
-  border-color: transparent;
-  color: var(--text);
-}
-
 h1,
 h2,
 p {
@@ -154,20 +140,40 @@ p {
 }
 .source-field,
 .yummy-options {
-  margin-top: 24px;
+  margin-top: 20px;
 }
 select {
+  appearance: none;
   background: var(--control);
+  background-image: var(--chevron);
+  background-position: right 12px center;
+  background-repeat: no-repeat;
+  background-size: 16px 16px;
   border: 1px solid var(--line);
   border-radius: 5px;
   color: var(--text);
   height: 40px;
   min-width: 0;
-  padding: 0 10px;
+  padding: 0 32px 0 10px;
   width: 100%;
 }
 select:hover {
   border-color: #5b6872;
+}
+.language-select {
+  background: transparent var(--chevron) no-repeat right 6px center;
+  background-size: 16px 16px;
+  border-color: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  height: 32px;
+  padding: 0 22px 0 5px;
+  width: 88px;
+}
+.language-select:hover {
+  background-color: var(--control);
+  border-color: transparent;
+  color: var(--text);
 }
 .yummy-controls {
   align-items: end;
@@ -198,6 +204,8 @@ select:hover {
   border-color: var(--accent);
 }
 .source-trigger > span {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -205,19 +213,17 @@ select:hover {
 .source-trigger > small {
   color: var(--muted);
   font-size: 11px;
-  margin-left: auto;
   white-space: nowrap;
 }
-.source-trigger > i {
-  border: solid var(--muted);
-  border-width: 0 1.5px 1.5px 0;
+.source-trigger::after {
+  background: var(--chevron) center / 16px 16px no-repeat;
+  content: "";
   flex: 0 0 auto;
-  height: 6px;
-  transform: rotate(45deg) translateY(-2px);
-  width: 6px;
+  height: 16px;
+  width: 16px;
 }
-.source-trigger[aria-expanded="true"] > i {
-  transform: rotate(225deg) translate(-1px, -1px);
+.source-trigger[aria-expanded="true"]::after {
+  transform: rotate(180deg);
 }
 .source-popover {
   background: #242a2f;
@@ -336,24 +342,23 @@ select:hover {
   font-weight: 600;
 }
 .tracks summary b {
+  align-items: center;
   color: var(--muted);
+  display: inline-flex;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   font-weight: 400;
+  gap: 10px;
 }
 .tracks summary b::after {
-  border: solid currentColor;
-  border-width: 0 1px 1px 0;
+  background: var(--chevron) center / 16px 16px no-repeat;
   content: "";
-  display: inline-block;
-  height: 5px;
-  margin: 0 3px 3px 10px;
-  transform: rotate(45deg);
-  width: 5px;
+  display: block;
+  height: 16px;
+  width: 16px;
 }
 .tracks[open] summary b::after {
-  margin-bottom: 0;
-  transform: rotate(225deg);
+  transform: rotate(180deg);
 }
 .track-list {
   display: grid;
@@ -385,7 +390,7 @@ select:hover {
 .download-actions {
   gap: 16px;
   justify-content: space-between;
-  margin-top: 24px;
+  margin-top: 20px;
 }
 .segmented {
   gap: 2px;
@@ -442,16 +447,20 @@ select:hover {
 .product-actions button {
   background: transparent;
   border: 0;
-  color: #66c4fc;
+  color: var(--muted);
   cursor: pointer;
   min-height: 34px;
   padding: 5px 0;
 }
 .product-actions button:hover {
-  color: #a4dcfe;
+  color: var(--text);
 }
 .product-actions button:disabled {
   color: #75818a;
+}
+.product-status {
+  color: var(--muted);
+  margin-top: 8px;
 }
 .notice {
   color: #f3aaa2;

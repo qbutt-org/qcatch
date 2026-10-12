@@ -101,13 +101,15 @@ export function YummySourcePicker(props: {
     if (!open || !triggerRef.current || !panelRef.current) return;
     const trigger = triggerRef.current;
     const panel = panelRef.current;
+    const boundary = trigger.closest(".shell")!;
     const update = async () => {
       const position = await computePosition(trigger, panel, {
         middleware: [
           offset(6),
-          flip({ padding: 8 }),
-          shift({ padding: 8 }),
+          flip({ boundary, padding: 8 }),
+          shift({ boundary, padding: 8 }),
           size({
+            boundary,
             padding: 8,
             apply({ availableHeight, availableWidth, elements }) {
               elements.floating.style.maxHeight = `${availableHeight}px`;
@@ -160,7 +162,6 @@ export function YummySourcePicker(props: {
               ? t("Считаем…")
               : ""}
         </small>
-        <i />
       </button>
       {open && (
         <div

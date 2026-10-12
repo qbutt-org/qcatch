@@ -11,7 +11,6 @@ export function ProductActions(props: {
   audioIds?: string[];
   subtitleIds?: string[];
   youtube?: boolean;
-  currentVideo?: boolean;
 }) {
   const { t } = useLanguage();
   const [health, setHealth] = useState<NativeHealth>();
@@ -124,7 +123,7 @@ export function ProductActions(props: {
         {health?.qplayInstalled && (
           <button type="button" disabled={blocked("play")} onClick={() => perform("play")}>
             {current("play")?.status === "sent" ? t("Снова открыть в qplay")
-              : t(props.currentVideo ? "Текущее видео в qplay" : "Открыть в qplay")}
+              : t("Открыть в qplay")}
           </button>
         )}
         {!checking && !health?.qplayInstalled && (
@@ -146,9 +145,11 @@ export function ProductActions(props: {
           <button type="button" onClick={() => setRefresh((value) => value + 1)}>{t("Проверить подключение")}</button>
         )}
       </div>
-      {pending && <p role="status">{t(pending.action === "play" ? "Открываем qplay…" : "Передаём в qbutt…")}</p>}
-      {!pending && latest?.status === "sent" && <p role="status">{t(latest.action === "play"
-        ? "Запрос в qplay отправлен" : "Запрос в qbutt отправлен")}</p>}
+      {pending && (
+        <p class="product-status" role="status">
+          {t(pending.action === "play" ? "Открываем qplay…" : "Передаём в qbutt…")}
+        </p>
+      )}
       {error && <ErrorNotice message={error} />}
     </>
   );

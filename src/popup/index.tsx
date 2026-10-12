@@ -652,14 +652,13 @@ function UniversalApp() {
               {enqueueLabel}
             </button>
           </div>
-          {tabId !== undefined && state && (
+          {!yummy && tabId !== undefined && state && (
             <ProductActions
               tabId={tabId}
               pageUrl={state.page.url}
               sourceId={sourceId}
               audioIds={[...audioIds]}
               subtitleIds={[...subtitleIds]}
-              currentVideo={Boolean(yummy)}
             />
           )}
         </section>
