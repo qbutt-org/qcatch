@@ -5,6 +5,8 @@ import { resolveCapture } from "../background/integration.ts";
 import { vkSearchUrl } from "./vk-search.ts";
 import { libSession, LibSessionError } from "./lib-session.ts";
 import { cookies } from "./cookies.ts";
+import { parseVkVideoUrl } from "../shared/vk.ts";
+import { readVkVideo } from "../background/vk.ts";
 
 interface Frame {
     url: string;
@@ -391,6 +393,7 @@ async function resolve(command: BrowserCommand, controller: AbortController) {
     const probe: Probe = { tabId: tab.id, page, selected: page, resources: new Map(), headers: new Map(), controller, ready: false };
     probes.set(tab.id, probe);
     try {
+        controller.signal.throwIfAborted();
         await chrome.tabs.update(tab.id, { muted: true, url: referrer });
         await loaded(tab.id, controller.signal);
         if (referrer !== sourceUrl) {
@@ -399,6 +402,32 @@ async function resolve(command: BrowserCommand, controller: AbortController) {
             await mountFrame(probe, sourceUrl, sourceUrl);
         }
         await confirmSelection(probe, sourceUrl);
+        const vk = parseVkVideoUrl(sourceUrl);
+        if (vk) {
+            // The source already supplied an exact video URL, including access parameters.
+            // Do not turn episode metadata into VK query parameters or sniff recommendations.
+            const [script] = await abortable(chrome.scripting.executeScript({
+                args: [vk, probe.selected.url],
+                func: readVkVideo,
+                target: { tabId: probe.tabId, frameIds: [probe.selected.id!] },
+                world: "MAIN",
+            }), controller.signal);
+            const result = script?.result;
+            if (!result) throw new SourceError("media_unavailable", "Плеер VK не ответил. Обновите страницу и повторите действие.", sourceUrl);
+            if ("error" in result) throw new SourceError("media_unavailable", result.error, sourceUrl);
+            const url = publicUrl(result.url);
+            const subtitles = result.subtitles.map(track => ({ ...track, url: publicUrl(track.url) }));
+            const session = await cookies(url);
+            const headers: Record<string, string> = { Referer: result.sourceUrl, "User-Agent": navigator.userAgent };
+            if (session.length) headers.Cookie = session.map(cookie => `${cookie.name}=${cookie.value}`).join("; ");
+            await confirmSelection(probe, sourceUrl);
+            controller.signal.throwIfAborted();
+            return {
+                kind: "video", resolver: "direct", url, headers, subtitles,
+                sourceUrl: result.sourceUrl, title: result.title, quality: result.quality,
+                selection: command.selection ?? {},
+            };
+        }
         const prepared = await commandFrame(probe, { type: "prepare", selection: command.selection ?? {} });
         if (prepared?.error) throw new SourceError(prepared.code || "selection_unavailable", prepared.error, sourceUrl);
         const selectedUrl = publicUrl(prepared.url);
