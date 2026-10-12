@@ -62,7 +62,6 @@ export function YoutubePanel({
   const [jobs, setJobs] = useState<NativeJob[]>([]);
   const [notice, setNotice] = useState<string>();
   const [busy, setBusy] = useState(false);
-  const [opening, setOpening] = useState(false);
   const [retry, setRetry] = useState(0);
 
   useEffect(() => {
@@ -302,19 +301,6 @@ export function YoutubePanel({
     }
   };
 
-  const openInPlayer = async () => {
-    if (opening || connectionError || health?.tools.status !== "ready") return;
-    setOpening(true);
-    setNotice(undefined);
-    try {
-      await request({ type: "youtube:play", tabId, url });
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error));
-    } finally {
-      setOpening(false);
-    }
-  };
-
   return (
     <main class="shell youtube-shell">
       <Header />
@@ -530,28 +516,6 @@ export function YoutubePanel({
             </div>
           </div>
           <div class="youtube-download-action">
-            {health.qplayInstalled ? (
-              <button
-                class="youtube-text-button"
-                type="button"
-                disabled={opening}
-                onClick={() => void openInPlayer()}
-              >
-                {t(opening ? "Открываем qplay…" : "Открыть в qplay")}
-              </button>
-            ) : (
-              <button
-                class="youtube-text-button"
-                type="button"
-                onClick={() =>
-                  void chrome.tabs.create({
-                    url: "https://github.com/qbutt-org/qplay/releases/latest/download/qplay-setup.exe",
-                  })
-                }
-              >
-                {t("Установить qplay")}
-              </button>
-            )}
             <button
               class="primary"
               type="button"
@@ -563,7 +527,7 @@ export function YoutubePanel({
               )}
             </button>
           </div>
-          <ProductActions tabId={tabId} youtube />
+          <ProductActions tabId={tabId} pageUrl={url} youtube />
         </section>
       )}
       {notice && <ErrorNotice message={notice} />}

@@ -1,5 +1,12 @@
 import { NATIVE_BRIDGE_URL } from "../shared/native.ts";
 
+export class NativeBridgeError extends Error {
+  constructor(message: string, readonly deliveryUncertain = false) {
+    super(message);
+    this.name = "NativeBridgeError";
+  }
+}
+
 export async function bridgeRequest(
   path: string,
   body?: unknown,
@@ -14,14 +21,24 @@ export async function bridgeRequest(
       signal: AbortSignal.timeout(10_000),
     });
   } catch {
-    throw new Error(
+    throw new NativeBridgeError(
       "Локальный помощник не отвечает. Установите или запустите qcatch и повторите попытку.",
+      body !== undefined,
     );
   }
-  const result = (await response.json()) as { error?: string };
-  if (!response.ok || result.error)
-    throw new Error(
-      result.error ?? `Ошибка локального помощника (${response.status}).`,
+  let result: unknown;
+  try {
+    result = await response.json();
+  } catch {
+    throw new NativeBridgeError("Ответ приложения не удалось прочитать.", body !== undefined);
+  }
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    throw new NativeBridgeError("Ответ приложения не удалось прочитать.", body !== undefined);
+  }
+  const error = "error" in result && typeof result.error === "string" ? result.error : undefined;
+  if (!response.ok || error)
+    throw new NativeBridgeError(
+      error ?? `Ошибка локального помощника (${response.status}).`,
     );
   return result;
 }

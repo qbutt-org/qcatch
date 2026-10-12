@@ -128,6 +128,22 @@ const english = {
   "Смотреть в qbutt": "Watch in qbutt",
   "Скачать через qbutt": "Download with qbutt",
   "Открываем qplay…": "Opening qplay…",
+  "Передаём в qbutt…": "Sending to qbutt…",
+  "Снова открыть в qplay": "Open in qplay again",
+  "Снова смотреть в qbutt": "Watch in qbutt again",
+  "Снова скачать через qbutt": "Download with qbutt again",
+  "Запрос в qplay отправлен": "Request sent to qplay",
+  "Запрос в qbutt отправлен": "Request sent to qbutt",
+  "Проверить подключение": "Check connection",
+  "Серия {number}": "Episode {number}",
+  "Плеер {number}": "Player {number}",
+  "Передача прервана. Повторите попытку.": "Transfer interrupted. Retry.",
+  "Ответ потерян. Проверьте окно приложения.": "Response lost. Check the application's window.",
+  "Ответ приложения не удалось прочитать.": "Could not read the application's response.",
+  "Дождитесь текущей передачи.": "Wait for the current transfer.",
+  "Выбор передачи устарел. Откройте qcatch заново.": "The transfer selection expired. Reopen qcatch.",
+  "Обновите страницу и снова выберите видео в qcatch.": "Reload the page and select the video in qcatch again.",
+  "Выбранное видео изменилось или передача устарела. Откройте qcatch и передайте видео заново.": "This capture expired or changed. Open qcatch and send the media again.",
   "Нужно приложение на компьютере": "Install the Windows app",
   "Установите или запустите qcatch для Windows.":
     "Install or launch qcatch for Windows.",
@@ -192,8 +208,6 @@ const english = {
   "Страница изменилась. Откройте qcatch заново.":
     "The page changed. Reopen qcatch.",
   "Выберите источник видео.": "Select a video source.",
-  "Выберите точный источник для передачи в qbutt.":
-    "Select the exact source to send to qbutt.",
   "Источник устарел. Откройте qcatch заново.":
     "This source expired. Reopen qcatch.",
   "Слишком много недавних передач. Повторите через несколько минут.":
@@ -336,6 +350,9 @@ export function errorTranslation(
   language: Language,
   detail: string,
 ): { message: string; detail?: string } {
+  if (detail === "capture_expired") {
+    return { message: translate(language, "Выбранное видео изменилось или передача устарела. Откройте qcatch и передайте видео заново.") };
+  }
   if (language === "ru") {
     const sourceHttp = detail.match(
       /^The source returned HTTP (\d+)\. Reload the page and retry\.$/,

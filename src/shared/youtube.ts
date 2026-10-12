@@ -27,7 +27,6 @@ export type YoutubeMessage =
   | { type: "youtube:info"; url: string; retry?: boolean }
   | { type: "youtube:jobs" }
   | { type: "youtube:download"; url: string; selection: YoutubeSelection }
-  | { type: "youtube:play"; tabId: number; url: string }
   | { type: "youtube:cancel"; jobId: string }
   | { type: "youtube:reveal"; jobId: string }
   | { type: "youtube:selection:get"; tabId: number; url: string }

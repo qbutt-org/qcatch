@@ -144,6 +144,7 @@ export async function addCapture(
   tabId: number,
   frameId: number,
   payload: CapturePayload,
+  documentId?: string,
 ): Promise<TabState> {
   return mutateTab(tabId, async () => {
     const state = await readTabState(tabId);
@@ -152,13 +153,14 @@ export async function addCapture(
 
     for (const candidate of candidates) {
       if (!isInterestingMedia(candidate.kind)) continue;
-      const id = identity(candidate);
+      const id = `${frameId}:${documentId ?? ""}:${identity(candidate)}`;
       const episode = episodeFromPayload(candidate);
       const resource: CapturedResource = {
         ...candidate,
         frameId,
         id,
         tabId,
+        ...(documentId ? { documentId } : {}),
         ...(episode !== undefined ? { episode } : {}),
       };
       const index = state.resources.findIndex((item) => item.id === id);
@@ -207,5 +209,5 @@ export async function addWebRequestCapture(
     url: details.url,
     ...(details.initiator ? { initiator: details.initiator } : {}),
     ...(referer ? { referer } : {}),
-  });
+  }, details.documentId);
 }

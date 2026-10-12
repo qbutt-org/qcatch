@@ -113,6 +113,7 @@ function UniversalApp() {
   );
   const yummySourceSignature =
     yummy?.sources.map(yummySourceKey).join("\u0001") ?? "";
+  const frames = [...new Set(primary.map((resource) => resource.frameId))].sort((left, right) => left - right);
 
   useEffect(() => {
     void chrome.tabs
@@ -522,8 +523,9 @@ function UniversalApp() {
               >
                 {primary.map((resource) => (
                   <option value={resource.id} key={resource.id}>
-                    {providerName(resource, t("Источник"))} [{quality(resource)}
-                    ]
+                    {resource.name || providerName(resource, t("Источник"))} [{quality(resource)}]
+                    {resource.episode !== undefined ? ` ${t("Серия {number}", { number: resource.episode })}` : ""}
+                    {frames.length > 1 ? ` ${t("Плеер {number}", { number: frames.indexOf(resource.frameId) + 1 })}` : ""}
                   </option>
                 ))}
               </select>
@@ -650,9 +652,10 @@ function UniversalApp() {
               {enqueueLabel}
             </button>
           </div>
-          {tabId !== undefined && (
+          {tabId !== undefined && state && (
             <ProductActions
               tabId={tabId}
+              pageUrl={state.page.url}
               sourceId={sourceId}
               audioIds={[...audioIds]}
               subtitleIds={[...subtitleIds]}

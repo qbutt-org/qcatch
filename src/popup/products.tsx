@@ -1,9 +1,12 @@
 import { useEffect, useState } from "preact/hooks";
 import type { NativeHealth } from "../shared/native.ts";
+import { NATIVE_BRIDGE_PROTOCOL } from "../shared/native.ts";
+import { productActionKey, type ProductAction, type ProductActionKind } from "../shared/integration.ts";
 import { ErrorNotice, useLanguage } from "./language.tsx";
 
 export function ProductActions(props: {
   tabId: number;
+  pageUrl: string;
   sourceId?: string;
   audioIds?: string[];
   subtitleIds?: string[];
@@ -12,91 +15,140 @@ export function ProductActions(props: {
 }) {
   const { t } = useLanguage();
   const [health, setHealth] = useState<NativeHealth>();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
+  const [checking, setChecking] = useState(true);
+  const [refresh, setRefresh] = useState(0);
+  const [actions, setActions] = useState<ProductAction[]>([]);
+  const [healthError, setHealthError] = useState<string>();
+  const [connectionError, setConnectionError] = useState<string>();
+  const selection = {
+    tabId: props.tabId,
+    pageUrl: props.pageUrl,
+    ...(props.sourceId ? { sourceId: props.sourceId } : {}),
+    audioIds: props.audioIds ?? [],
+    subtitleIds: props.subtitleIds ?? [],
+  };
 
   useEffect(() => {
     let mounted = true;
-    void chrome.runtime
-      .sendMessage({ type: "integration:health" })
+    setChecking(true);
+    void chrome.runtime.sendMessage({ type: "integration:health" })
       .then((value: NativeHealth & { error?: string }) => {
-        if (mounted && !value.error) setHealth(value);
+        if (value.error) throw new Error(value.error);
+        if (value.protocol !== NATIVE_BRIDGE_PROTOCOL) {
+          throw new Error("Обновите qcatch: версия помощника несовместима с расширением.");
+        }
+        if (mounted) {
+          setHealth(value);
+          setHealthError(undefined);
+        }
       })
-      .catch(() => undefined);
-    return () => {
-      mounted = false;
-    };
+      .catch((error: unknown) => {
+        if (mounted) {
+          setHealth(undefined);
+          setHealthError(error instanceof Error ? error.message : String(error));
+        }
+      })
+      .finally(() => { if (mounted) setChecking(false); });
+    return () => { mounted = false; };
+  }, [refresh]);
+
+  useEffect(() => {
+    const reload = () => setRefresh((value) => value + 1);
+    window.addEventListener("focus", reload);
+    return () => window.removeEventListener("focus", reload);
   }, []);
 
-  const perform = async (action: "play" | "watch" | "download") => {
-    setBusy(true);
-    setError(undefined);
-    try {
-      const response = (await chrome.runtime.sendMessage({
-        type: action === "play" ? "media:play" : "integration:handoff",
-        tabId: props.tabId,
-        sourceId: props.sourceId,
-        audioIds: props.audioIds ?? [],
-        subtitleIds: props.subtitleIds ?? [],
-        ...(action === "play" ? {} : { action }),
-      })) as { error?: string };
-      if (response.error) throw new Error(response.error);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setBusy(false);
-    }
+  useEffect(() => {
+    let mounted = true;
+    let generation = 0;
+    const load = () => {
+      const current = ++generation;
+      void chrome.runtime.sendMessage({ type: "integration:state", tabId: props.tabId })
+        .then((value: ProductAction[] | { error: string }) => {
+          if (!Array.isArray(value)) throw new Error(value.error);
+          if (mounted && current === generation) setActions(value);
+        })
+        .catch((error: unknown) => {
+          if (mounted && current === generation) {
+            setConnectionError(error instanceof Error ? error.message : String(error));
+          }
+        });
+    };
+    const changed = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area === "session" && changes[`product-actions:${props.tabId}`]) load();
+    };
+    load();
+    chrome.storage.onChanged.addListener(changed);
+    return () => {
+      mounted = false;
+      chrome.storage.onChanged.removeListener(changed);
+    };
+  }, [props.tabId]);
+
+  const pending = actions.find((action) => action.status === "preparing" || action.status === "sending");
+  const current = (kind: ProductActionKind) => actions.findLast((action) => action.key === productActionKey(kind, selection));
+  const blocked = (kind: ProductActionKind) => {
+    const action = current(kind);
+    return Boolean(pending || action?.status === "uncertain"
+      || !props.youtube && !props.sourceId
+      || props.youtube && kind === "play" && health?.tools.status !== "ready");
+  };
+  const latest = actions.findLast((action) => action.key === productActionKey(action.action, selection));
+  const error = latest?.error ?? connectionError ?? healthError;
+
+  const perform = (action: ProductActionKind) => {
+    const previous = current(action);
+    setConnectionError(undefined);
+    setRefresh((value) => value + 1);
+    void chrome.runtime.sendMessage({
+      ...selection,
+      type: action === "play" ? "media:play" : "integration:handoff",
+      ...(action === "play" ? {} : { action }),
+      ...(previous ? { previousId: previous.id } : {}),
+    }).then((value: ProductAction | { error: string }) => {
+      if ("error" in value && !("status" in value)) throw new Error(value.error);
+    }).catch((error: unknown) => {
+      setConnectionError(error instanceof Error ? error.message : String(error));
+    });
+  };
+
+  const install = (product: "qplay" | "qcatch") => {
+    void chrome.tabs.create({
+      url: `https://github.com/qbutt-org/${product}/releases/latest/download/${product}-setup.exe`,
+    });
   };
 
   return (
     <>
       <div class="product-actions">
-        {!props.youtube &&
-          (health?.qplayInstalled ? (
-            <button
-              type="button"
-              disabled={busy || !props.sourceId}
-              onClick={() => void perform("play")}
-            >
-              {t(
-                props.currentVideo
-                  ? "Текущее видео в qplay"
-                  : "Открыть в qplay",
-              )}
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() =>
-                void chrome.tabs.create({
-                  url: health
-                    ? "https://github.com/qbutt-org/qplay/releases/latest/download/qplay-setup.exe"
-                    : "https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-setup.exe",
-                })
-              }
-            >
-              {t(health ? "Установить qplay" : "Установить qcatch для Windows")}
-            </button>
-          ))}
+        {health?.qplayInstalled && (
+          <button type="button" disabled={blocked("play")} onClick={() => perform("play")}>
+            {current("play")?.status === "sent" ? t("Снова открыть в qplay")
+              : t(props.currentVideo ? "Текущее видео в qplay" : "Открыть в qplay")}
+          </button>
+        )}
+        {!checking && !health?.qplayInstalled && (
+          <button type="button" onClick={() => install(health ? "qplay" : "qcatch")}>
+            {t(health ? "Установить qplay" : "Установить qcatch для Windows")}
+          </button>
+        )}
         {health?.qbuttInstalled && (
           <>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void perform("watch")}
-            >
-              {t("Смотреть в qbutt")}
+            <button type="button" disabled={blocked("watch")} onClick={() => perform("watch")}>
+              {current("watch")?.status === "sent" ? t("Снова смотреть в qbutt") : t("Смотреть в qbutt")}
             </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void perform("download")}
-            >
-              {t("Скачать через qbutt")}
+            <button type="button" disabled={blocked("download")} onClick={() => perform("download")}>
+              {current("download")?.status === "sent" ? t("Снова скачать через qbutt") : t("Скачать через qbutt")}
             </button>
           </>
         )}
+        {!checking && (!health || !health.qplayInstalled) && (
+          <button type="button" onClick={() => setRefresh((value) => value + 1)}>{t("Проверить подключение")}</button>
+        )}
       </div>
+      {pending && <p role="status">{t(pending.action === "play" ? "Открываем qplay…" : "Передаём в qbutt…")}</p>}
+      {!pending && latest?.status === "sent" && <p role="status">{t(latest.action === "play"
+        ? "Запрос в qplay отправлен" : "Запрос в qbutt отправлен")}</p>}
       {error && <ErrorNotice message={error} />}
     </>
   );

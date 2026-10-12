@@ -44,6 +44,7 @@ export type CapturePayload = {
 };
 
 export type CapturedResource = CapturePayload & {
+  documentId?: string;
   frameId: number;
   id: string;
   tabId: number;

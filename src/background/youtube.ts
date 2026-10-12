@@ -42,6 +42,38 @@ async function youtubeCookies() {
   );
 }
 
+export async function captureYoutubePlayback(tabId: number, expectedUrl: string) {
+  const url = videoUrl(expectedUrl);
+  const [capture] = await chrome.scripting.executeScript({
+    target: { tabId, frameIds: [0] },
+    func: () => {
+      const videos = [...document.querySelectorAll("video")];
+      // Music can hide its sole video; Shorts can retain a hidden watch-page player.
+      let video = videos.length === 1 ? videos[0] : undefined;
+      let largestArea = 0;
+      for (const candidate of videos) {
+        const rect = candidate.getBoundingClientRect();
+        const area =
+          Math.max(0, Math.min(innerWidth, rect.right) - Math.max(0, rect.left))
+          * Math.max(0, Math.min(innerHeight, rect.bottom) - Math.max(0, rect.top));
+        if (area > largestArea) {
+          largestArea = area;
+          video = candidate;
+        }
+      }
+      return video ? { url: location.href, time: video.currentTime } : null;
+    },
+  });
+  const position = capture?.result;
+  if (!position || !Number.isFinite(position.time) || position.time < 0) {
+    throw new Error("Запустите видео или трек на странице, затем откройте его в qplay.");
+  }
+  if (youtubeVideoUrl(position.url) !== url) {
+    throw new Error("Видео на странице изменилось. Откройте popup заново.");
+  }
+  return { url, start: position.time, cookies: await youtubeCookies() };
+}
+
 export async function handleYoutubeMessage(
   message: YoutubeMessage,
 ): Promise<unknown> {
@@ -71,49 +103,6 @@ export async function handleYoutubeMessage(
         ...selectionValue(message.selection),
         cookies: await youtubeCookies(),
       });
-    case "youtube:play": {
-      const url = videoUrl(message.url);
-      const [capture] = await chrome.scripting.executeScript({
-        target: { tabId: message.tabId, frameIds: [0] },
-        func: () => {
-          const videos = [...document.querySelectorAll("video")];
-          // Music can hide its sole video; Shorts can retain a hidden watch-page player.
-          let video = videos.length === 1 ? videos[0] : undefined;
-          let largestArea = 0;
-          for (const candidate of videos) {
-            const rect = candidate.getBoundingClientRect();
-            const area =
-              Math.max(
-                0,
-                Math.min(innerWidth, rect.right) - Math.max(0, rect.left),
-              ) *
-              Math.max(
-                0,
-                Math.min(innerHeight, rect.bottom) - Math.max(0, rect.top),
-              );
-            if (area > largestArea) {
-              largestArea = area;
-              video = candidate;
-            }
-          }
-          return video ? { url: location.href, time: video.currentTime } : null;
-        },
-      });
-      const position = capture?.result;
-      if (!position || !Number.isFinite(position.time) || position.time < 0) {
-        throw new Error(
-          "Запустите видео или трек на странице, затем откройте его в qplay.",
-        );
-      }
-      if (youtubeVideoUrl(position.url) !== url) {
-        throw new Error("Видео на странице изменилось. Откройте popup заново.");
-      }
-      return bridgeRequest("/play", {
-        url,
-        start: position.time,
-        cookies: await youtubeCookies(),
-      });
-    }
     case "youtube:cancel":
     case "youtube:reveal": {
       if (!/^[a-zA-Z0-9-]{1,64}$/.test(message.jobId))

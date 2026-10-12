@@ -20,6 +20,7 @@ import { showRutubeDownloadProgress } from "./action.ts";
 import { handleYoutubeMessage } from "./youtube.ts";
 import type { YoutubeMessage } from "../shared/youtube.ts";
 import { handleIntegration, removeTabCaptures, type IntegrationMessage } from "./integration.ts";
+import { removeProductActions } from "./product-actions.ts";
 import { handlePlatformMessage, type PlatformMessage } from "./platforms.ts";
 
 const requestHeaders = new Map<string, chrome.webRequest.HttpHeader[]>();
@@ -62,11 +63,14 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     chrome.storage.session.remove(`youtube:${tabId}`),
     removePreferences(tabId),
     removeTabCaptures(tabId),
+    removeProductActions(tabId),
   ]);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status === "loading") void resetTabState(tabId);
+  if (changeInfo.status === "loading") {
+    void Promise.all([resetTabState(tabId), removeProductActions(tabId)]);
+  }
 });
 
 chrome.runtime.onMessage.addListener((rawMessage: unknown, sender, sendResponse) => {
@@ -99,7 +103,7 @@ chrome.runtime.onMessage.addListener((rawMessage: unknown, sender, sendResponse)
     switch (message.type) {
       case "bridge:capture":
         if (tabId === undefined) return undefined;
-        return addCapture(tabId, sender.frameId ?? 0, message.payload as CapturePayload);
+        return addCapture(tabId, sender.frameId ?? 0, message.payload as CapturePayload, sender.documentId);
       case "bridge:page":
         if (tabId === undefined) return undefined;
         return updatePage(tabId, message.page);
