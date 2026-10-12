@@ -2,6 +2,8 @@ import { cookies } from "./cookies.ts";
 
 const API_URL = "https://api.cdnlibs.org/api/";
 const SITE_URLS = ["https://mangalib.me/", "https://ranobelib.me/"];
+// Another request may close its temporary tab as soon as its snapshot is read.
+const ownedTabs = new Set<number>();
 
 export class LibSessionError extends Error {
     constructor(readonly code: string) {
@@ -61,13 +63,15 @@ export async function libSession(url: string, signal: AbortSignal) {
         opening = chrome.tabs.create({ url: "about:blank", active: false, windowId: window.id });
         const tab = await canceled(opening, bounded);
         if (tab.id === undefined) throw new LibSessionError("browser_error");
+        ownedTabs.add(tab.id);
         await canceled(chrome.tabs.update(tab.id, { muted: true, url }), bounded);
         return tab.id;
     }
 
     try {
         const tabs = await canceled(chrome.tabs.query({ url: `${origin}/*` }), bounded);
-        const tab = tabs.find(candidate => !candidate.incognito && candidate.id !== undefined);
+        const tab = tabs.find(candidate => !candidate.incognito && candidate.id !== undefined
+            && !ownedTabs.has(candidate.id));
         let tabId = tab?.id ?? await openSite();
         for (;;) {
             bounded.throwIfAborted();
@@ -103,8 +107,14 @@ export async function libSession(url: string, signal: AbortSignal) {
     } finally {
         // A canceled tabs.create may complete later: keep its cleanup attached.
         if (opening) {
-            const cleanup = opening.then(tab => tab.id === undefined ? undefined : chrome.tabs.remove(tab.id))
-                .catch(() => undefined);
+            const cleanup = opening.then(async tab => {
+                if (tab.id === undefined) return;
+                try {
+                    await chrome.tabs.remove(tab.id);
+                } finally {
+                    ownedTabs.delete(tab.id);
+                }
+            }).catch(() => undefined);
             await canceled(cleanup, bounded).catch(() => undefined);
         }
     }
