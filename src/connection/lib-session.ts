@@ -86,6 +86,7 @@ export async function libSession(url: string, signal: AbortSignal) {
                 if (!result || result.changed) throw new LibSessionError("selected_content_changed");
                 if (result.invalid) throw new LibSessionError("browser_invalid_response");
                 if (!result.expired) {
+                    if (expired && result.accessToken === null) throw new LibSessionError("login_required");
                     return { accessToken: result.accessToken, cookies: await canceled(cookies(API_URL), bounded) };
                 }
                 // The site's own requests refresh its token. Observe the new
