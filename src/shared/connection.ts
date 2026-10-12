@@ -21,7 +21,7 @@ export interface VkSearchVideo {
 
 export interface BrowserCommand {
     id: number;
-    method: "cookies" | "fetch" | "resolve" | "vk-search" | "cancel";
+    method: "cookies" | "fetch" | "resolve" | "vk-search" | "lib-session" | "cancel";
     url?: string;
     query?: string;
     init?: { method?: string; headers?: Record<string, string>; body?: string };

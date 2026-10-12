@@ -3,6 +3,8 @@ import { bestHlsVariant, hlsIsEncrypted, parseHlsMaster } from "./hls.ts";
 import { classifyMedia, type Capture } from "./media.ts";
 import { resolveCapture } from "../background/integration.ts";
 import { vkSearchUrl } from "./vk-search.ts";
+import { libSession, LibSessionError } from "./lib-session.ts";
+import { cookies } from "./cookies.ts";
 
 interface Frame {
     url: string;
@@ -73,22 +75,8 @@ function connect(): void {
         });
         connection.onMessage.addListener((command) => void dispatch(command, connection));
         connection.postMessage({ type: "hello", browser: browserId(), version: 1, userAgent: navigator.userAgent,
-            capabilities: ["vk-search"] });
+            capabilities: ["vk-search", "lib-session"] });
     } catch { port = undefined; }
-}
-
-async function cookies(url: string) {
-    return (await chrome.cookies.getAll({ url })).filter((cookie) => !cookie.partitionKey).map((cookie) => ({
-        name: cookie.name,
-        value: cookie.value,
-        domain: cookie.domain,
-        path: cookie.path,
-        secure: cookie.secure,
-        hostOnly: cookie.hostOnly,
-        httpOnly: cookie.httpOnly,
-        sameSite: cookie.sameSite,
-        ...(cookie.expirationDate === undefined ? {} : { expirationDate: cookie.expirationDate }),
-    }));
 }
 
 async function browserFetch(command: BrowserCommand, signal: AbortSignal) {
@@ -530,7 +518,7 @@ try {
 async function dispatch(value: unknown, connection: chrome.runtime.Port): Promise<void> {
     if (connection !== port || !value || typeof value !== "object") return;
     const command = value as BrowserCommand;
-    if (!Number.isSafeInteger(command.id) || !["cookies", "fetch", "resolve", "vk-search", "cancel"].includes(command.method)) return;
+    if (!Number.isSafeInteger(command.id) || !["cookies", "fetch", "resolve", "vk-search", "lib-session", "cancel"].includes(command.method)) return;
     if (command.method === "cancel") { operations.get(command.id)?.abort(); return; }
     const controller = new AbortController();
     operations.set(command.id, controller);
@@ -539,6 +527,7 @@ async function dispatch(value: unknown, connection: chrome.runtime.Port): Promis
         if (operations.size > 16) throw new SourceError("browser_busy", "Браузер занят. Повторите действие.");
         publicUrl(command.url!);
         if (command.method === "cookies") response.result = await cookies(command.url!);
+        if (command.method === "lib-session") response.result = await libSession(command.url!, controller.signal);
         if (command.method === "fetch") response.result = await browserFetch(command, controller.signal);
         if (command.method === "vk-search") response.result = await searchVk(command, controller.signal);
         if (command.method === "resolve") response.result = command.kind && command.kind !== "video"
@@ -548,8 +537,10 @@ async function dispatch(value: unknown, connection: chrome.runtime.Port): Promis
         response.result = undefined;
         const url = command.method === "resolve" ? command.url : error instanceof SourceError ? error.url : undefined;
         response.error = {
-            code: error instanceof SourceError ? error.code : controller.signal.aborted ? "canceled" : "browser_error",
-            message: error instanceof Error ? error.message : "Не удалось прочитать источник.",
+            code: error instanceof SourceError || error instanceof LibSessionError ? error.code
+                : controller.signal.aborted ? "canceled" : "browser_error",
+            message: command.method === "lib-session" ? "Could not read the Lib browser session."
+                : error instanceof Error ? error.message : "Не удалось прочитать источник.",
             ...(!controller.signal.aborted && url ? { url } : {}),
         };
     } finally {
