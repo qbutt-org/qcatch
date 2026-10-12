@@ -56,9 +56,9 @@ See [stream detection and site notes](docs/SUPPORTED-SITES.md). DRM-protected vi
 
 ## Watch in qplay
 
-The watch button sends the selected video to the installed [qplay](https://github.com/qbutt-org/qplay), an independent player built on mpv. Install qplay first if it is not already installed.
+Open in qplay sends the selected video to the installed [qplay](https://github.com/qbutt-org/qplay). If the player is missing, qcatch offers to install it.
 
-When [qbutt](https://github.com/qbutt-org/qbutt) is installed, the same extension connects to it to provide the browser session and obtain the selected player's stream. qbutt offers to install qcatch from its interface.
+With [qbutt](https://github.com/qbutt-org/qbutt) installed, Watch in qbutt and Download with qbutt are available. They send the selected media and browser session; the regular Download video button saves through qcatch. If qbutt is missing, qcatch links to its website for installation. qbutt also offers to install qcatch from its interface.
 
 ## Data and permissions
 

@@ -1,8 +1,8 @@
 import { useEffect, useState } from "preact/hooks";
-import type { NativeJob } from "../shared/native.ts";
+import { NATIVE_BRIDGE_PROTOCOL, type NativeHealth, type NativeJob } from "../shared/native.ts";
 import { PLATFORM_NAMES, type PlatformReference } from "../shared/platforms.ts";
 import type { QueueSnapshot } from "../shared/types.ts";
-import { errorTranslation } from "../shared/localization.ts";
+import { errorTranslation, type Message } from "../shared/localization.ts";
 import type {
   PlatformMessage,
   PlatformResult,
@@ -23,6 +23,10 @@ async function request<T>(message: PlatformMessage): Promise<T> {
   return result;
 }
 
+type LiveSetup =
+  | { status: "checking" | "ready" | "qplay" }
+  | { status: "qcatch"; error: string };
+
 export function PlatformPanel({
   tabId,
   reference,
@@ -35,6 +39,38 @@ export function PlatformPanel({
   const [queue, setQueue] = useState<QueueSnapshot>({ items: [], revision: 0 });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [liveSetup, setLiveSetup] = useState<LiveSetup>({ status: "checking" });
+
+  useEffect(() => {
+    if (reference.kind !== "live") return;
+    let mounted = true;
+    const refresh = () => {
+      void chrome.runtime.sendMessage({ type: "integration:health" })
+        .then((health: NativeHealth & { error?: string }) => {
+          if (!health) {
+            throw new Error("Локальный помощник не отвечает. Установите или запустите qcatch и повторите попытку.");
+          }
+          if (health.error) throw new Error(health.error);
+          if (health.protocol !== NATIVE_BRIDGE_PROTOCOL) {
+            throw new Error("Обновите qcatch: версия помощника несовместима с расширением.");
+          }
+          if (mounted) setLiveSetup({ status: health.qplayInstalled ? "ready" : "qplay" });
+        })
+        .catch((failure: unknown) => {
+          if (mounted) setLiveSetup({
+            status: "qcatch",
+            error: failure instanceof Error ? failure.message : String(failure),
+          });
+        });
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => {
+      mounted = false;
+      window.removeEventListener("focus", refresh);
+    };
+  }, [reference.kind]);
+
   useEffect(() => {
     let mounted = true;
     const refresh = async () => {
@@ -61,6 +97,12 @@ export function PlatformPanel({
       clearInterval(interval);
     };
   }, [reference.url]);
+
+  const install = (product: "qcatch" | "qplay") => {
+    void chrome.tabs.create({
+      url: `https://github.com/qbutt-org/${product}/releases/latest/download/${product}-setup.exe`,
+    });
+  };
 
   const run = async () => {
     setBusy(true);
@@ -97,6 +139,34 @@ export function PlatformPanel({
       setError(error instanceof Error ? error.message : String(error));
     }
   };
+
+  let actionLabel: Message;
+  if (busy) actionLabel = "Подготавливаем…";
+  else if (reference.kind === "live") {
+    switch (liveSetup.status) {
+      case "qcatch":
+        actionLabel = "Установить qcatch для Windows";
+        break;
+      case "qplay":
+        actionLabel = "Установить qplay";
+        break;
+      case "checking":
+        actionLabel = "Подключаемся";
+        break;
+      case "ready":
+        actionLabel = "Открыть эфир в qplay";
+        break;
+    }
+  } else actionLabel = reference.kind === "track" ? "Скачать трек" : "Скачать медиа";
+
+  const primaryAction = () => {
+    if (reference.kind === "live" && (liveSetup.status === "qcatch" || liveSetup.status === "qplay")) {
+      install(liveSetup.status);
+      return;
+    }
+    void run();
+  };
+
   return (
     <main class="shell">
       <Header />
@@ -107,44 +177,23 @@ export function PlatformPanel({
         <button
           class="primary"
           type="button"
-          disabled={busy}
-          onClick={() => void run()}
+          disabled={busy || (reference.kind === "live" && liveSetup.status === "checking")}
+          onClick={primaryAction}
         >
-          {t(
-            busy
-              ? "Подготавливаем…"
-              : reference.kind === "live"
-                ? "Открыть эфир в qplay"
-                : reference.kind === "track"
-                  ? "Скачать трек"
-                  : "Скачать медиа",
-          )}
+          {t(actionLabel)}
         </button>
       </div>
       {error && <ErrorNotice message={error} />}
-      {(error?.includes("Локальный помощник не отвечает.") ||
+      {reference.kind === "live" && liveSetup.status === "qcatch" && (
+        <ErrorNotice message={liveSetup.error} />
+      )}
+      {reference.kind !== "live" && (error?.includes("Локальный помощник не отвечает.") ||
         error?.includes("версия помощника несовместима")) && (
         <button
           type="button"
-          onClick={() =>
-            void chrome.tabs.create({
-              url: "https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-setup.exe",
-            })
-          }
+          onClick={() => install("qcatch")}
         >
           {t("Установить qcatch для Windows")}
-        </button>
-      )}
-      {error?.includes("qplay is not installed") && (
-        <button
-          type="button"
-          onClick={() =>
-            void chrome.tabs.create({
-              url: "https://github.com/qbutt-org/qplay/releases/latest/download/qplay-setup.exe",
-            })
-          }
-        >
-          {t("Установить qplay")}
         </button>
       )}
       <NativeQueue

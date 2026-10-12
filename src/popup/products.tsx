@@ -111,9 +111,11 @@ export function ProductActions(props: {
     });
   };
 
-  const install = (product: "qplay" | "qcatch") => {
+  const install = (product: "qplay" | "qcatch" | "qbutt") => {
     void chrome.tabs.create({
-      url: `https://github.com/qbutt-org/${product}/releases/latest/download/${product}-setup.exe`,
+      url: product === "qbutt"
+        ? "https://qbutt-org.github.io/qbutt/"
+        : `https://github.com/qbutt-org/${product}/releases/latest/download/${product}-setup.exe`,
     });
   };
 
@@ -141,7 +143,10 @@ export function ProductActions(props: {
             </button>
           </>
         )}
-        {!checking && (!health || !health.qplayInstalled) && (
+        {health && !health.qbuttInstalled && (
+          <button type="button" onClick={() => install("qbutt")}>{t("Установить qbutt")}</button>
+        )}
+        {!checking && !health && (
           <button type="button" onClick={() => setRefresh((value) => value + 1)}>{t("Проверить подключение")}</button>
         )}
       </div>

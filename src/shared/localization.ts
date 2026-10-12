@@ -122,8 +122,8 @@ const english = {
   "Страница аниме изменилась. Откройте popup заново.":
     "The anime page changed. Reopen qcatch.",
   "Открыть в qplay": "Open in qplay",
-  "Текущее видео в qplay": "Current video in qplay",
   "Установить qplay": "Install qplay",
+  "Установить qbutt": "Install qbutt",
   "Установить qcatch для Windows": "Install qcatch for Windows",
   "Смотреть в qbutt": "Watch in qbutt",
   "Скачать через qbutt": "Download with qbutt",
@@ -132,8 +132,6 @@ const english = {
   "Снова открыть в qplay": "Open in qplay again",
   "Снова смотреть в qbutt": "Watch in qbutt again",
   "Снова скачать через qbutt": "Download with qbutt again",
-  "Запрос в qplay отправлен": "Request sent to qplay",
-  "Запрос в qbutt отправлен": "Request sent to qbutt",
   "Проверить подключение": "Check connection",
   "Серия {number}": "Episode {number}",
   "Плеер {number}": "Player {number}",
