@@ -1,11 +1,11 @@
-import { MAX_MESSAGE_BYTES, NATIVE_HOST, publicUrl, type BrowserCommand, type BrowserId, type BrowserResponse } from "../shared/connection.ts";
+import { MAX_FETCH_BODY_BYTES, MAX_MESSAGE_BYTES, NATIVE_HOST, publicUrl, type BrowserCommand, type BrowserId, type BrowserResponse } from "../shared/connection.ts";
 import { bestHlsVariant, hlsIsEncrypted, parseHlsMaster } from "./hls.ts";
 import { classifyMedia, type Capture } from "./media.ts";
 import { resolveCapture } from "../background/integration.ts";
 import { vkSearchUrl } from "./vk-search.ts";
 import { libSession, LibSessionError } from "./lib-session.ts";
 import { cookies } from "./cookies.ts";
-import { boundedText } from "./response.ts";
+import { boundedText, ResponseTooLargeError } from "./response.ts";
 import { parseVkVideoUrl } from "../shared/vk.ts";
 import { readVkVideo } from "../background/vk.ts";
 
@@ -132,7 +132,7 @@ async function browserFetch(command: BrowserCommand, signal: AbortSignal) {
     signal.throwIfAborted();
     const response = await fetch(url, { ...command.init, credentials: "include", signal });
     publicUrl(response.url);
-    const body = await boundedText(response);
+    const body = await boundedText(response, MAX_FETCH_BODY_BYTES);
     if ([401, 403, 429].includes(response.status)) {
         throw new SourceError("verification_required", "Откройте источник в браузере, завершите вход или проверку и повторите действие.", command.url);
     }
@@ -609,12 +609,13 @@ async function dispatch(value: unknown, connection: chrome.runtime.Port): Promis
         if (command.method === "vk-search") response.result = await searchVk(command, controller.signal);
         if (command.method === "resolve") response.result = command.kind && command.kind !== "video"
             ? await resolveFile(command, controller) : await resolve(command, controller);
-        if (new TextEncoder().encode(JSON.stringify(response)).byteLength > MAX_MESSAGE_BYTES) throw new Error("Ответ источника слишком большой.");
+        if (new TextEncoder().encode(JSON.stringify(response)).byteLength > MAX_MESSAGE_BYTES) throw new ResponseTooLargeError();
     } catch (error) {
         response.result = undefined;
         const url = command.method === "resolve" ? command.url : error instanceof SourceError ? error.url : undefined;
         response.error = {
             code: error instanceof SourceError || error instanceof LibSessionError ? error.code
+                : error instanceof ResponseTooLargeError ? "response_too_large"
                 : controller.signal.aborted ? "canceled" : "browser_error",
             message: command.method === "lib-session" ? "Could not read the Lib browser session."
                 : error instanceof Error ? error.message : "Не удалось прочитать источник.",

@@ -1,5 +1,6 @@
 export const NATIVE_HOST = "org.qbutt.qcatch";
 export const MAX_MESSAGE_BYTES = 768 * 1024;
+export const MAX_FETCH_BODY_BYTES = 680 * 1024;
 
 export type BrowserId = "edge" | "chrome";
 export type Selection = {

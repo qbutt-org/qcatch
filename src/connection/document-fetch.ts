@@ -1,5 +1,5 @@
-import { boundedText } from "./response.ts";
-import type { BrowserCommand } from "../shared/connection.ts";
+import { boundedText, ResponseTooLargeError } from "./response.ts";
+import { MAX_FETCH_BODY_BYTES, type BrowserCommand } from "../shared/connection.ts";
 
 interface FetchMessage {
     type: "qbutt:document-fetch";
@@ -29,7 +29,7 @@ async function fetchDocument(message: FetchMessage, controller: AbortController)
             mode: "same-origin",
             signal,
         });
-        const body = await boundedText(response);
+        const body = await boundedText(response, MAX_FETCH_BODY_BYTES);
         signal.throwIfAborted();
 
         if (location.href !== message.expectedPage || new URL(response.url).origin !== request.origin) {
@@ -49,7 +49,12 @@ async function fetchDocument(message: FetchMessage, controller: AbortController)
         if (deadline.aborted) {
             return { error: { code: "browser_timeout", message: "Источник не ответил вовремя." } };
         }
-        return { error: { code: "browser_error", message: error instanceof Error ? error.message : "Не удалось прочитать источник." } };
+        return {
+            error: {
+                code: error instanceof ResponseTooLargeError ? "response_too_large" : "browser_error",
+                message: error instanceof Error ? error.message : "Не удалось прочитать источник.",
+            },
+        };
     }
 }
 
