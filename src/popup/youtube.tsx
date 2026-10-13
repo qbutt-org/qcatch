@@ -527,9 +527,9 @@ export function YoutubePanel({
               )}
             </button>
           </div>
-          <ProductActions tabId={tabId} pageUrl={url} youtube />
         </section>
       )}
+      {!connectionError && <ProductActions tabId={tabId} pageUrl={url} youtube />}
       {notice && <ErrorNotice message={notice} />}
       <NativeQueue
         jobs={jobs}

@@ -89,8 +89,7 @@ export function ProductActions(props: {
   const blocked = (kind: ProductActionKind) => {
     const action = current(kind);
     return Boolean(pending || action?.status === "uncertain"
-      || !props.youtube && !props.sourceId
-      || props.youtube && kind === "play" && health?.tools.status !== "ready");
+      || !props.youtube && !props.sourceId);
   };
   const latest = actions.findLast((action) => action.key === productActionKey(action.action, selection));
   const error = latest?.error ?? connectionError ?? healthError;

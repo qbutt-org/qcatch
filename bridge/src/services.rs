@@ -135,14 +135,14 @@ pub fn reference(value: &str) -> Result<Reference> {
     })
 }
 
-pub fn watch(home: &Path, tools: &Tools, input: &str, cookies: Vec<BrowserCookie>) -> Result<()> {
+pub fn watch(home: &Path, input: &str, cookies: Vec<BrowserCookie>) -> Result<()> {
     let reference = reference(input)?;
     ensure!(
         reference.service == "Twitch" && reference.live,
         "Open a Twitch live channel to watch it in qplay."
     );
     CookieJar::validate_scope(&cookies, reference.domains)?;
-    crate::playback::launch(home, tools, reference.url, 0.0, cookies)
+    crate::playback::launch(home, reference.url, 0.0, cookies)
 }
 
 fn metadata(

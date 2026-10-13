@@ -348,40 +348,12 @@ fn route(
                 input.start.is_finite() && input.start >= 0.0,
                 "Неверная позиция воспроизведения"
             );
-            let Ok(current) = tools.try_read() else {
-                return Ok((
-                    409,
-                    json!({"error":"Дождитесь подготовки инструментов, затем повторите."}),
-                ));
-            };
-            if !current.is_current() {
-                drop(current);
-                sender.send(Task::Prepare)?;
-                return Ok((
-                    409,
-                    json!({"error":"Проверяем инструменты. Повторите открытие через несколько секунд."}),
-                ));
-            }
-            crate::playback::launch(home, &current, url, input.start, input.cookies)?;
+            crate::playback::launch(home, url, input.start, input.cookies)?;
             Ok((200, json!({"opened":true,"start":input.start})))
         }
         (&Method::Post, "/services/play") => {
             let input: services::Request = body(request)?;
-            let Ok(current) = tools.try_read() else {
-                return Ok((
-                    409,
-                    json!({"error":"Wait for the tools to finish preparing, then retry."}),
-                ));
-            };
-            if !current.is_current() {
-                drop(current);
-                sender.send(Task::Prepare)?;
-                return Ok((
-                    409,
-                    json!({"error":"Wait for the tools to finish preparing, then retry."}),
-                ));
-            }
-            services::watch(home, &current, &input.url, input.cookies)?;
+            services::watch(home, &input.url, input.cookies)?;
             Ok((200, json!({"opened":true})))
         }
         (&Method::Post, "/services/jobs") => {

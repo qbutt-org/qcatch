@@ -20,7 +20,6 @@ use windows::Win32::{
 use crate::{
     browser,
     cookies::{BrowserCookie, CookieJar},
-    tools::Tools,
 };
 
 #[derive(Deserialize, Serialize)]
@@ -38,17 +37,10 @@ pub struct Request {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Extractor {
-    pub tools: PathBuf,
     pub start: f64,
 }
 
-pub fn launch(
-    home: &Path,
-    tools: &Tools,
-    url: String,
-    start: f64,
-    cookies: Vec<BrowserCookie>,
-) -> Result<()> {
+pub fn launch(home: &Path, url: String, start: f64, cookies: Vec<BrowserCookie>) -> Result<()> {
     open(Request {
         home: home.into(),
         url,
@@ -56,10 +48,7 @@ pub fn launch(
         headers: vec![],
         audio: vec![],
         subtitles: vec![],
-        extractor: Some(Extractor {
-            tools: tools.directory.clone(),
-            start,
-        }),
+        extractor: Some(Extractor { start }),
     })
 }
 
@@ -207,15 +196,7 @@ pub fn worker() -> Result<()> {
                     "--ytdl-raw-options-append=ignore-config=",
                     "--ytdl-raw-options-append=no-plugin-dirs=",
                 ])
-                .arg(format!("--start=+{:.3}", extractor.start))
-                .arg(format!(
-                    "--script-opts-append=ytdl_hook-ytdl_path={}",
-                    extractor.tools.join("yt-dlp.exe").display()
-                ))
-                .arg(format!(
-                    "--ytdl-raw-options-append=js-runtimes=deno:{}",
-                    extractor.tools.join("deno.exe").display()
-                ));
+                .arg(format!("--start=+{:.3}", extractor.start));
             if let Some(jar) = &jar {
                 command.arg(format!(
                     "--ytdl-raw-options-append=cookies={}",
