@@ -45,10 +45,16 @@ async function boundedText(response: Response): Promise<string> {
     if (Number(response.headers.get("content-length") ?? 0) > limit) throw new Error("Ответ источника слишком большой.");
     const reader = response.body?.getReader();
     if (!reader) return "";
-    const decoder = new TextDecoder();
     let size = 0;
     let text = "";
     try {
+        const charset = response.headers.get("content-type")?.match(/charset\s*=\s*["']?([^;\s"']+)/i)?.[1] ?? "utf-8";
+        let decoder: TextDecoder;
+        try {
+            decoder = new TextDecoder(charset);
+        } catch {
+            throw new Error(`Источник объявил неподдерживаемую кодировку ответа: ${charset}.`);
+        }
         while (true) {
             const chunk = await reader.read();
             if (chunk.done) return text + decoder.decode();
