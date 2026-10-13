@@ -132,7 +132,6 @@ const english = {
   "Снова открыть в qplay": "Open in qplay again",
   "Снова смотреть в qbutt": "Watch in qbutt again",
   "Снова скачать через qbutt": "Download with qbutt again",
-  "Проверить подключение": "Check connection",
   "Серия {number}": "Episode {number}",
   "Плеер {number}": "Player {number}",
   "Передача прервана. Повторите попытку.": "Transfer interrupted. Retry.",

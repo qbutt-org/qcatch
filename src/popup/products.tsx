@@ -161,9 +161,6 @@ export function ProductActions(props: {
         {health && !health.qbuttInstalled && (
           <button type="button" onClick={() => install("qbutt")}>{t("Установить qbutt")}</button>
         )}
-        {!checking && !health && (
-          <button type="button" onClick={() => setRefresh((value) => value + 1)}>{t("Проверить подключение")}</button>
-        )}
       </div>
       {pending && (
         <p class="product-status" role="status">
