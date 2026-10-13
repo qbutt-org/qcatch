@@ -1,4 +1,5 @@
 import "../connection/content.ts";
+import "../connection/document-fetch.ts";
 import { classifyMedia, detectProvider } from "../shared/media.ts";
 import { validateTwitterCapture } from "../shared/twitter-media.ts";
 import type { BackgroundMessage, CapturePayload, YummyProbeSource, YummySource } from "../shared/types.ts";

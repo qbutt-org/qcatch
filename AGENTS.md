@@ -6,7 +6,21 @@ qcatch is the public, independently installable Windows browser media catcher in
 
 - `src/content/sniffer.ts` is the single MAIN-world fetch/XHR observer. `src/content/bridge.ts` owns isolated extension messaging; `src/connection/content.ts` owns exact player interaction. Keep these worlds separate and build content scripts without code splitting.
 - `src/background/` owns Chrome APIs, tab state, queue and temporary DNR rules. `src/offscreen/` owns media I/O, OPFS and Mediabunny remuxing; never send media bytes through the service worker or buffer a whole output in memory. `src/shared/` has no Chrome API dependency.
-- `src/connection/` owns qbutt's cookies/fetch/resolve/cancel protocol and capability-advertised `vk-search` and `lib-session`. `fetch` returns bounded HTTP responses; qbutt's source parsers classify HTML browser checks. Lib sessions read only the current access token from the requested MangaLib/RanobeLib origin and scoped API cookies; the site owns refresh, and refresh tokens never leave its storage. Use an existing suitable tab first; missing or expired sessions may use one muted, inactive owned tab, closed after success, failure or cancellation. VK search reads the exact query's rendered result cards in one bounded, muted, inactive owned tab and closes it after success, failure or cancellation; never extract the site's hidden authorization state. The extension ID is pinned by the public manifest key and `release/extension-id.txt`. `org.qbutt.qcatch` is the only native host; never add a second embedded qbutt extension. `--version-json` and `--connect-browser edge|chrome` are protocol version 1; connection metadata returns the selected browser, extension directory/ID and native host.
+- `src/connection/` owns qbutt's cookies/fetch/resolve/cancel protocol and capability-advertised
+  `vk-search` and `lib-session`. `fetch` returns bounded HTTP responses; qbutt's source parsers
+  classify HTML browser checks. It uses an existing top-level same-origin tab's isolated content
+  script when available, so partitioned cookies follow that document. Select and verify the exact
+  document before requesting, cancel and settle in-flight work, and never retry a POST after an
+  uncertain response. Otherwise fetch from the service worker. Lib sessions read only the current
+  access token from the requested MangaLib/RanobeLib origin and scoped API cookies; the site owns
+  refresh, and refresh tokens never leave its storage. Use an existing suitable tab first; missing
+  or expired sessions may use one muted, inactive owned tab, closed after success, failure or
+  cancellation. VK search reads the exact query's rendered result cards in one bounded, muted,
+  inactive owned tab and closes it after success, failure or cancellation; never extract the site's
+  hidden authorization state. The extension ID is pinned by the public manifest key and
+  `release/extension-id.txt`. `org.qbutt.qcatch` is the only native host; never add a second embedded
+  qbutt extension. `--version-json` and `--connect-browser edge|chrome` are protocol version 1;
+  connection metadata returns the selected browser, extension directory/ID and native host.
 - `bridge/` owns the Rust helper, standalone download queue and scoped temporary cookie jars. Its HTTP API listens only on `127.0.0.1:47832`, checks Host, extension Origin and the required request header. Native messaging mode relays bounded JSON to qbutt's current-user pipe; qbutt owns that broker and content library.
 - `src/shared/platforms.ts` owns exact post/clip/track URL recognition. `src/background/platform-assets.ts` reads the selected page's accessible assets; `bridge/src/services.rs` owns local yt-dlp extraction. Reuse the existing browser or native queue. Browser data must match the requested media ID; never substitute a video thumbnail, preview, different post or guessed player state.
 - qplay discovery uses Windows App Paths. Pass ordinary mpv arguments and keep playback cookie jars until qplay exits; qplay owns its configuration and engine. qbutt handoff uses `qbutt://capture` with a stable page and opaque browser-session capture ID, never a CDN URL or cookies. Changed, missing or expired captures fail explicitly rather than selecting another frame or episode.

@@ -5,6 +5,7 @@ import { resolveCapture } from "../background/integration.ts";
 import { vkSearchUrl } from "./vk-search.ts";
 import { libSession, LibSessionError } from "./lib-session.ts";
 import { cookies } from "./cookies.ts";
+import { boundedText } from "./response.ts";
 import { parseVkVideoUrl } from "../shared/vk.ts";
 import { readVkVideo } from "../background/vk.ts";
 
@@ -40,31 +41,6 @@ class SourceError extends Error {
     constructor(readonly code: string, message: string, readonly url?: string) { super(message); }
 }
 
-async function boundedText(response: Response): Promise<string> {
-    const limit = 512 * 1024;
-    if (Number(response.headers.get("content-length") ?? 0) > limit) throw new Error("Ответ источника слишком большой.");
-    const reader = response.body?.getReader();
-    if (!reader) return "";
-    let size = 0;
-    let text = "";
-    try {
-        const charset = response.headers.get("content-type")?.match(/charset\s*=\s*["']?([^;\s"']+)/i)?.[1] ?? "utf-8";
-        let decoder: TextDecoder;
-        try {
-            decoder = new TextDecoder(charset);
-        } catch {
-            throw new Error(`Источник объявил неподдерживаемую кодировку ответа: ${charset}.`);
-        }
-        while (true) {
-            const chunk = await reader.read();
-            if (chunk.done) return text + decoder.decode();
-            size += chunk.value.byteLength;
-            if (size > limit) throw new Error("Ответ источника слишком большой.");
-            text += decoder.decode(chunk.value, { stream: true });
-        }
-    } finally { await reader.cancel().catch(() => undefined); }
-}
-
 function browserId(): BrowserId {
     return /Edg\//.test(navigator.userAgent) ? "edge" : "chrome";
 }
@@ -88,7 +64,73 @@ function connect(): void {
 }
 
 async function browserFetch(command: BrowserCommand, signal: AbortSignal) {
-    const response = await fetch(publicUrl(command.url!), { ...command.init, credentials: "include", signal });
+    const url = publicUrl(command.url!);
+    const origin = new URL(url).origin;
+    const tabs = await chrome.tabs.query({});
+    const available = tabs.filter(tab => !tab.incognito && tab.url?.startsWith(`${origin}/`));
+    const exact = available.filter(tab => tab.url === url);
+    const other = available.filter(tab => tab.url !== url);
+
+    for (const tab of [...exact, ...other]) {
+        signal.throwIfAborted();
+        const tabId = tab.id;
+        if (tabId === undefined) continue;
+        const identity = await chrome.tabs.sendMessage(tabId, {
+            type: "qbutt:document-fetch:identity",
+        }, { frameId: 0 }).catch(() => undefined) as { url?: string; documentToken?: string } | undefined;
+        const page = identity?.url;
+        const documentToken = identity?.documentToken;
+        if (page !== tab.url || typeof documentToken !== "string") continue;
+
+        const token = crypto.randomUUID();
+        const target = { frameId: 0 };
+        const pending = chrome.tabs.sendMessage(tabId, {
+            type: "qbutt:document-fetch",
+            token,
+            documentToken,
+            expectedPage: page,
+            url,
+            init: command.init,
+        }, target) as Promise<{
+            status?: number;
+            url?: string;
+            headers?: Record<string, string>;
+            body?: string;
+            error?: { code: string; message: string };
+        }>;
+
+        let cancellation: Promise<unknown> | undefined;
+        const abort = () => {
+            cancellation = chrome.tabs.sendMessage(tabId, {
+                type: "qbutt:document-fetch:cancel",
+                token,
+                documentToken,
+            }, target).catch(() => undefined);
+        };
+        signal.addEventListener("abort", abort, { once: true });
+        if (signal.aborted) abort();
+
+        try {
+            const reply = await pending;
+            signal.throwIfAborted();
+            if (reply?.error) throw new SourceError(reply.error.code, reply.error.message);
+            if (!reply || typeof reply.status !== "number" || typeof reply.url !== "string"
+                || typeof reply.body !== "string" || !reply.headers || typeof reply.headers !== "object") {
+                throw new Error("Браузер вернул неверный ответ источника.");
+            }
+            publicUrl(reply.url);
+            if ([401, 403, 429].includes(reply.status)) {
+                throw new SourceError("verification_required", "Откройте источник в браузере, завершите вход или проверку и повторите действие.", url);
+            }
+            return reply;
+        } finally {
+            signal.removeEventListener("abort", abort);
+            if (cancellation) await cancellation;
+        }
+    }
+
+    signal.throwIfAborted();
+    const response = await fetch(url, { ...command.init, credentials: "include", signal });
     publicUrl(response.url);
     const body = await boundedText(response);
     if ([401, 403, 429].includes(response.status)) {
