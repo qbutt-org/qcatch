@@ -152,7 +152,14 @@ try {
     [5, "audio", "https://example.org/audio.m4a"], [6, "subtitle", "https://example.org/subtitle.vtt"],
   ] as const) {
     frames.set(frameId, { url: `https://example.org/player/${frameId}`, documentId: `document-${frameId}`, media: [url] });
-    await addCapture(tabId, frameId, { kind, url, provider: "unknown", detectedAt: Date.now() }, `document-${frameId}`);
+    const headers = frameId === 4 ? [
+      { name: "Range", value: "bytes=589824-" },
+      { name: "If-Range", value: "\"sintel-etag\"" },
+      { name: "Accept", value: "video/mp4" },
+    ] : [];
+    await addCapture(tabId, frameId,
+      { kind, url, provider: "unknown", detectedAt: Date.now(), headers },
+      `document-${frameId}`);
   }
   const resources = (await readTabState(tabId)).resources;
   const selected: ProductSelection = { tabId, pageUrl, sourceId: resources.find((resource) => resource.frameId === 4)!.id,
@@ -166,6 +173,21 @@ try {
     check(!missing.qplayInstalled && ready.qplayInstalled, "Health was cached across install/retry");
     const duplicates = resources.filter((resource) => resource.url === mediaUrl);
     check(duplicates.length === 2 && duplicates[0]!.id !== duplicates[1]!.id, "Equal URLs collapsed different frames");
+  });
+
+  await scenario("playback-does-not-replay-browser-ranges", async () => {
+    const before = posts.length;
+    const action = await send(selected, "play");
+    const post = posts.at(-1)!;
+    check(action.status === "sent" && posts.length === before + 1 && post.path === "/play-media",
+      "Selected playback did not reach the native helper");
+    const headers = post.body.headers as Array<[string, string]>;
+    check(!headers.some(([name]) => /^(?:range|if-range)$/i.test(name)),
+      "Captured byte range overrode qplay's own requests");
+    check(headers.some(([name, value]) => name === "Accept" && value === "video/mp4")
+      && headers.some(([name, value]) => name === "Referer" && value === pageUrl)
+      && headers.some(([name, value]) => name === "User-Agent" && value === navigator.userAgent),
+    "Playback lost its request context while removing the captured range");
   });
 
   await scenario("popup-reopen-single-flight-and-exact-capture", async () => {

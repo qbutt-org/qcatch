@@ -69,7 +69,11 @@ async function selected(message: ProductSelection) {
 function media(job: DownloadJob) {
   const main = job.inputs[0];
   if (!main) throw new Error("Выберите источник видео.");
-  const headers = new Map(main.headers.map(({ name, value }) => [name, value]));
+  const headers = new Map(
+    main.headers
+      .filter(({ name }) => !/^(?:range|if-range)$/i.test(name))
+      .map(({ name, value }) => [name, value]),
+  );
   headers.set("User-Agent", navigator.userAgent);
   return {
     url: publicUrl(main.url),
