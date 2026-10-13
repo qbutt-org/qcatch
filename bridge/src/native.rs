@@ -37,6 +37,22 @@ pub fn relay(arguments: &[OsString]) -> Result<()> {
         arguments.iter().any(|arg| arg == expected_origin.as_str()),
         "Unknown browser extension"
     );
+
+    let home = platform::known_folder(&FOLDERID_LocalAppData)?.join("qcatch");
+    fs::create_dir_all(&home)?;
+    let control = platform::Control::new(&home)?;
+    if control.stopping(0)? {
+        return Ok(());
+    }
+    thread::spawn(move || {
+        // A relay owns no downloads. The browser reconnects after installation.
+        let code = match control.stopping(u32::MAX) {
+            Ok(true) => 0,
+            _ => 1,
+        };
+        std::process::exit(code);
+    });
+
     let discovery = std::env::var_os("QBUTT_BROWSER_BRIDGE_DISCOVERY")
         .map(PathBuf::from)
         .unwrap_or(
