@@ -42,11 +42,16 @@ async function youtubeCookies() {
   );
 }
 
-export async function captureYoutubePlayback(tabId: number, expectedUrl: string) {
+export async function readYoutubePlayer(tabId: number, expectedUrl: string, documentId?: string) {
   const url = videoUrl(expectedUrl);
+  const tab = await chrome.tabs.get(tabId);
+  if (youtubeVideoUrl(tab.url) !== url) throw new Error("capture_expired");
+  const origin = new URL(tab.url!).origin;
   const [capture] = await chrome.scripting.executeScript({
-    target: { tabId, frameIds: [0] },
-    func: () => {
+    target: { tabId, ...(documentId ? { documentIds: [documentId] } : { frameIds: [0] }) },
+    args: [origin],
+    func: (expectedOrigin: string) => {
+      if (location.origin !== expectedOrigin) return null;
       const videos = [...document.querySelectorAll("video")];
       // Music can hide its sole video; Shorts can retain a hidden watch-page player.
       let video = videos.length === 1 ? videos[0] : undefined;
@@ -61,17 +66,33 @@ export async function captureYoutubePlayback(tabId: number, expectedUrl: string)
           video = candidate;
         }
       }
-      return video ? { url: location.href, time: video.currentTime } : null;
+      return {
+        url: location.href,
+        time: video?.currentTime ?? null,
+        media: [...document.querySelectorAll<HTMLMediaElement>("video,audio")]
+          .map((element) => element.currentSrc || element.src).filter(Boolean).sort(),
+      };
     },
   });
   const position = capture?.result;
-  if (!position || !Number.isFinite(position.time) || position.time < 0) {
+  if (!capture?.documentId || !position || youtubeVideoUrl(position.url) !== url) {
+    throw new Error("capture_expired");
+  }
+  if (position.time === null || !Number.isFinite(position.time) || position.time < 0) {
     throw new Error("Запустите видео или трек на странице, затем откройте его в qplay.");
   }
-  if (youtubeVideoUrl(position.url) !== url) {
-    throw new Error("Видео на странице изменилось. Откройте popup заново.");
-  }
-  return { url, start: position.time, cookies: await youtubeCookies() };
+  return {
+    identity: { url: position.url, documentId: capture.documentId, media: position.media },
+    start: position.time,
+  };
+}
+
+export async function captureYoutubePlayback(tabId: number, expectedUrl: string) {
+  const { identity, start } = await readYoutubePlayer(tabId, expectedUrl);
+  return {
+    identity,
+    payload: { url: videoUrl(expectedUrl), start, cookies: await youtubeCookies() },
+  };
 }
 
 export async function handleYoutubeMessage(

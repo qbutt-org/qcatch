@@ -5,7 +5,7 @@ import type { DownloadJob } from "../shared/types.ts";
 import type { IntegrationMessage, ProductSelection } from "../shared/integration.ts";
 import { readTabState } from "./state.ts";
 import { bridgeRequest, NativeBridgeError } from "./native.ts";
-import { captureYoutubePlayback } from "./youtube.ts";
+import { captureYoutubePlayback, readYoutubePlayer } from "./youtube.ts";
 import { performProductAction, readProductActions } from "./product-actions.ts";
 
 export type { IntegrationMessage } from "../shared/integration.ts";
@@ -20,7 +20,6 @@ interface CaptureBinding {
   tabId: number;
   pageUrl: string;
   created: number;
-  youtube?: true;
   job?: DownloadJob;
   frames?: Array<{ frameId: number; documentId?: string; identity: FrameIdentity }>;
   resources?: Array<{ id: string; frameId: number; documentId: string; url: string }>;
@@ -113,38 +112,39 @@ async function prepareProductAction(message: Exclude<IntegrationMessage,
   const tab = await chrome.tabs.get(message.tabId);
   const pageUrl = sourcePage(tab.url ?? "");
   if (sourcePage(message.pageUrl) !== pageUrl) throw new Error("Страница изменилась. Откройте qcatch заново.");
-  const binding: CaptureBinding = { tabId: message.tabId, pageUrl, created: Date.now() };
   if (youtubeVideoUrl(pageUrl)) {
-    binding.youtube = true;
-    binding.frames = [{ frameId: 0, identity: await chrome.tabs.sendMessage(message.tabId,
-      { type: "capture:identity" }, { frameId: 0 }) as FrameIdentity }];
-  } else {
-    const capture = await selected(message);
-    binding.job = capture.job;
-    binding.resources = capture.resources
-      .map(({ id, frameId, documentId, url }) => {
-        if (!documentId) throw new Error("Обновите страницу и снова выберите видео в qcatch.");
-        return { id, frameId, documentId, url };
-      })
-      .sort((left, right) => left.id.localeCompare(right.id));
-    const frames = [...new Map(binding.resources.map(({ frameId, documentId }) =>
-      [documentId, { frameId, documentId }])).values()].sort((left, right) => left.frameId - right.frameId);
-    binding.frames = await Promise.all(frames.map(async (frame) => ({
-      ...frame,
-      identity: await chrome.tabs.sendMessage(message.tabId, { type: "capture:identity" }, frame)
-        .catch(() => { throw new Error("capture_expired"); }) as FrameIdentity,
-    })));
+    if (message.type !== "media:play") {
+      throw new Error("Видео YouTube можно открыть в qplay или скачать через qcatch.");
+    }
+    const { identity, payload } = await captureYoutubePlayback(message.tabId, pageUrl);
+    return async () => {
+      const current = await readYoutubePlayer(message.tabId, pageUrl, identity.documentId);
+      if (current.identity.url !== identity.url || current.identity.documentId !== identity.documentId
+        || JSON.stringify(current.identity.media) !== JSON.stringify(identity.media)) throw new Error("capture_expired");
+      await requestOpening("/play", payload);
+    };
   }
+
+  const binding: CaptureBinding = { tabId: message.tabId, pageUrl, created: Date.now() };
+  const capture = await selected(message);
+  binding.job = capture.job;
+  binding.resources = capture.resources
+    .map(({ id, frameId, documentId, url }) => {
+      if (!documentId) throw new Error("Обновите страницу и снова выберите видео в qcatch.");
+      return { id, frameId, documentId, url };
+    })
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const frames = [...new Map(binding.resources.map(({ frameId, documentId }) =>
+    [documentId, { frameId, documentId }])).values()].sort((left, right) => left.frameId - right.frameId);
+  binding.frames = await Promise.all(frames.map(async (frame) => ({
+    ...frame,
+    identity: await chrome.tabs.sendMessage(message.tabId, { type: "capture:identity" }, frame)
+      .catch(() => { throw new Error("capture_expired"); }) as FrameIdentity,
+  })));
+
   await validateCapture(binding);
 
   if (message.type === "media:play") {
-    if (binding.youtube) {
-      const payload = await captureYoutubePlayback(message.tabId, pageUrl);
-      return async () => {
-        await validateCapture(binding);
-        await requestOpening("/play", payload);
-      };
-    }
     const job = binding.job!;
     const resolved = media(job);
     if ([...job.inputs, ...job.subtitles].some((source) =>
@@ -210,7 +210,6 @@ async function validateCapture(binding: CaptureBinding): Promise<void> {
     if (!identity || identity.url !== frame.identity.url || identity.documentId !== frame.identity.documentId
       || JSON.stringify(identity.media) !== JSON.stringify(frame.identity.media)) throw new Error("capture_expired");
   }
-  if (binding.youtube) return;
   if (!binding.job || !binding.resources) throw new Error("capture_expired");
   const state = await readTabState(binding.tabId);
   if (!binding.resources.every((selected) => state.resources.some((resource) =>
@@ -224,11 +223,6 @@ export async function resolveCapture(pageUrl: string, selection: Selection) {
   const binding = (await chrome.storage.session.get(`capture:${id}`))[`capture:${id}`] as CaptureBinding | undefined;
   if (!binding || binding.pageUrl !== pageUrl || Date.now() - binding.created > 10 * 60_000) throw new Error("capture_expired");
   await validateCapture(binding);
-  if (binding.youtube) {
-    const cookies = (await chrome.cookies.getAll({ url: pageUrl })).filter((cookie) => !cookie.partitionKey);
-    return { kind: "video", resolver: "yt-dlp", url: youtubeVideoUrl(pageUrl), selection: { captureId: id },
-      headers: { "User-Agent": navigator.userAgent, ...(cookies.length ? { Cookie: cookies.map(({ name, value }) => `${name}=${value}`).join("; ") } : {}) } };
-  }
   const job = binding.job!;
   const resolved = media(job);
   if (resolved.audio.length > 1) throw new Error("unsupported_multi_audio");

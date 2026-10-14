@@ -65,7 +65,9 @@ export function ProductActions(props: {
       void chrome.runtime.sendMessage({ type: "integration:state", tabId: props.tabId })
         .then((value: ProductAction[] | { error: string }) => {
           if (!Array.isArray(value)) throw new Error(value.error);
-          if (mounted && current === generation) setActions(value);
+          if (mounted && current === generation) {
+            setActions(value.filter((action) => !props.youtube || action.action === "play"));
+          }
         })
         .catch((error: unknown) => {
           if (mounted && current === generation) {
@@ -82,7 +84,7 @@ export function ProductActions(props: {
       mounted = false;
       chrome.storage.onChanged.removeListener(changed);
     };
-  }, [props.tabId]);
+  }, [props.tabId, props.youtube]);
 
   const pending = actions.find((action) => action.status === "preparing" || action.status === "sending");
   const current = (kind: ProductActionKind) => actions.findLast((action) => action.key === productActionKey(kind, selection));
@@ -148,7 +150,7 @@ export function ProductActions(props: {
             {t(health ? "Установить qplay" : "Установить qcatch для Windows")}
           </button>
         )}
-        {health?.qbuttInstalled && (
+        {!props.youtube && health?.qbuttInstalled && (
           <div class="qbutt-actions">
             <button type="button" disabled={blocked("watch")} onClick={() => perform("watch")}>
               {current("watch")?.status === "sent" ? t("Снова смотреть в qbutt") : t("Смотреть в qbutt")}
@@ -158,7 +160,7 @@ export function ProductActions(props: {
             </button>
           </div>
         )}
-        {health && !health.qbuttInstalled && (
+        {!props.youtube && health && !health.qbuttInstalled && (
           <button type="button" onClick={() => install("qbutt")}>{t("Установить qbutt")}</button>
         )}
       </div>

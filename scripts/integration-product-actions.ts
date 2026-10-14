@@ -19,6 +19,9 @@ const frames = new Map<number, { url: string; documentId: string; media: string[
 const posts: Array<{ path: string; body: Record<string, unknown> }> = [];
 let tabUrl = pageUrl;
 let cookieFailure = false;
+let missingReceiver = false;
+let cookieReadHook: (() => void) | undefined;
+let scriptReads = 0;
 let installed = false;
 let dropResponse = false;
 let passed = 0;
@@ -118,15 +121,27 @@ Object.defineProperty(globalThis, "chrome", { value: {
     async sendMessage(id: number, message: { type: string }, options?: { frameId: number; documentId?: string }) {
       check(id === tabId, "Unexpected message tab");
       if (message.type !== "capture:identity") return {};
+      if (missingReceiver) throw new Error("Could not establish connection. Receiving end does not exist.");
       const identity = frames.get(options!.frameId);
       check(identity, "Missing selected frame");
       check(!options?.documentId || identity.documentId === options.documentId, "capture_expired");
       return structuredClone(identity);
     },
   },
-  scripting: { async executeScript() { return [{ result: { url: tabUrl, time: 42.25 } }]; } },
+  scripting: { async executeScript(request: { target: { tabId: number; frameIds?: number[]; documentIds?: string[] }; args: string[] }) {
+    scriptReads += 1;
+    check(request.target.tabId === tabId && request.args[0] === new URL(tabUrl).origin,
+      "YouTube snapshot lost its tab or origin guard");
+    const identity = frames.get(0)!;
+    check(request.target.documentIds ? request.target.documentIds[0] === identity.documentId
+      : request.target.frameIds?.join() === "0", "capture_expired");
+    return [{ documentId: identity.documentId, result: { url: tabUrl, time: 42.25, media: [...identity.media] } }];
+  } },
   cookies: { async getAll() {
     if (cookieFailure) throw new Error("Injected preparation failure");
+    const hook = cookieReadHook;
+    cookieReadHook = undefined;
+    hook?.();
     return [];
   } },
   action: { async setBadgeBackgroundColor() {}, async setBadgeText() {} },
@@ -575,6 +590,52 @@ try {
     const failure = await send({ ...selected, sourceId: unknown.id }, "play");
     check(failure.status === "failed" && failure.error?.includes("Обновите страницу") && posts.length === before + 1, "Unknown document identity lacks a concrete recovery or reached native dispatch");
   });
+
+  await scenario("youtube-without-content-receiver", async () => {
+    tabUrl = "https://www.youtube.com/watch?v=aO_U1RwJMDk&list=WL&index=1";
+    frames.set(0, { url: tabUrl, documentId: "youtube-document", media: ["blob:youtube-fixture"] });
+    missingReceiver = true;
+    const before = posts.length;
+    try {
+      const action = await send({ tabId, pageUrl: tabUrl, audioIds: [], subtitleIds: [] }, "play");
+      check(action.status === "sent" && posts.length === before + 1 && posts.at(-1)!.path === "/play",
+        "YouTube without content receiver failed before native dispatch: " + action.error);
+    } finally {
+      missingReceiver = false;
+    }
+  });
+
+  await scenario("youtube-qbutt-actions-rejected-without-capture", async () => {
+    const before = posts.length;
+    const reads = scriptReads;
+    const youtube: ProductSelection = { tabId, pageUrl: tabUrl, audioIds: [], subtitleIds: [] };
+    for (const action of ["watch", "download"] as const) {
+      const rejected = await send(youtube, action);
+      check(rejected.status === "failed" && rejected.error?.includes("qplay"), "Unsupported YouTube action was accepted");
+    }
+    check(posts.length === before && scriptReads === reads, "Unsupported YouTube handoff read media or reached native helper");
+  });
+
+  for (const change of ["document", "media", "spa", "origin"] as const) {
+    await scenario("youtube-" + change + "-changes-before-dispatch", async () => {
+      tabUrl = "https://www.youtube.com/watch?v=aaaaaaaaaaa";
+      frames.set(0, { url: tabUrl, documentId: "youtube-document", media: ["blob:youtube-fixture"] });
+      const youtube: ProductSelection = { tabId, pageUrl: tabUrl, audioIds: [], subtitleIds: [] };
+      const before = posts.length;
+      const reads = scriptReads;
+      cookieReadHook = () => {
+        if (change === "document") frames.get(0)!.documentId = "replacement-youtube-document";
+        if (change === "media") frames.get(0)!.media = ["blob:replacement-video"];
+        if (change === "spa") tabUrl = "https://www.youtube.com/watch?v=bbbbbbbbbbb";
+        if (change === "origin") tabUrl = "https://example.org/unrelated";
+      };
+      const action = await send(youtube, "play");
+      check(action.status === "failed" && posts.length === before, "Changed YouTube capture reached native dispatch");
+      if (change === "spa" || change === "origin") {
+        check(scriptReads === reads + 1, "Changed page received another script injection");
+      }
+    });
+  }
 
   await scenario("youtube-player-single-owner-and-spa-selection", async () => {
     const url = "https://www.youtube.com/watch?v=aaaaaaaaaaa";

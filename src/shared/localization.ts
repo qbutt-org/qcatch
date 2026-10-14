@@ -190,6 +190,8 @@ const english = {
     "The extension is not responding. Reload qcatch on the browser extensions page, then reopen it.",
   "Локальный помощник не отвечает. Установите или запустите qcatch и повторите попытку.":
     "qcatch for Windows is not responding. Install or launch it and try again.",
+  "Видео YouTube можно открыть в qplay или скачать через qcatch.":
+    "Open YouTube videos in qplay or download them through qcatch.",
   "Откройте конкретное видео на YouTube.": "Open a specific YouTube video.",
   "Проверьте формат и границы отрезка: конец должен быть позже начала.":
     "Check the format and clip range: end must be later than start.",
@@ -197,8 +199,6 @@ const english = {
     "Update qcatch: the Windows app and extension versions are incompatible.",
   "Запустите видео или трек на странице, затем откройте его в qplay.":
     "Play the video or track on the page, then open it in qplay.",
-  "Видео на странице изменилось. Откройте popup заново.":
-    "The video changed. Reopen qcatch.",
   "Неизвестная загрузка.": "Unknown download.",
   "Откройте постоянную страницу видео без временной ссылки доступа.":
     "Open the permanent video page instead of a temporary access link.",
