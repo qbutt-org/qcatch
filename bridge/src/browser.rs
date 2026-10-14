@@ -1,14 +1,30 @@
-use std::{env, fs, os::windows::process::CommandExt, path::PathBuf, process::Command};
+use std::{
+    env, fs,
+    path::PathBuf,
+    process::{Command, Stdio},
+};
 
 use anyhow::{Context, Result, ensure};
 use serde_json::json;
-use windows::Win32::{System::Threading::CREATE_NO_WINDOW, UI::Shell::FOLDERID_LocalAppData};
+use windows::Win32::{
+    Foundation::{
+        HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, INVALID_HANDLE_VALUE, SetHandleInformation,
+    },
+    System::Console::{STD_ERROR_HANDLE, STD_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE},
+    UI::Shell::FOLDERID_LocalAppData,
+};
 use winreg::{
     RegKey,
     enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE},
 };
 
 use crate::{EXTENSION_ID, platform};
+
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    // The windows crate maps both NULL and INVALID_HANDLE_VALUE to an error.
+    fn GetStdHandle(nstdhandle: STD_HANDLE) -> HANDLE;
+}
 
 pub const NATIVE_HOST: &str = "org.qbutt.qcatch";
 
@@ -44,11 +60,32 @@ pub fn connect(browser: &str) -> Result<()> {
         "Файлы расширения отсутствуют. Переустановите qcatch."
     );
     register()?;
+
+    // Null child streams alone still inherit the original CLI pipe handles on Windows.
+    for stream in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        let handle = unsafe { GetStdHandle(stream) };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(std::io::Error::last_os_error())
+                .context("Read setup command standard handle");
+        }
+        if !handle.0.is_null() {
+            unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0)) }
+                .context("Prevent browser setup from inheriting command output")?;
+        }
+    }
+
     Command::new(executable)
         .arg(page)
-        .creation_flags(CREATE_NO_WINDOW.0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()?;
-    Command::new("explorer.exe").arg(&extension).spawn()?;
+    Command::new("explorer.exe")
+        .arg(&extension)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
     println!(
         "{}",
         json!({ "browser": browser, "extensionDirectory": extension,
