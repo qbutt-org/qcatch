@@ -178,7 +178,7 @@ chrome.runtime.onMessage.addListener((rawMessage: unknown, sender, sendResponse)
       case "queue:cancel":
         await ensureOffscreenDocument();
         await chrome.runtime.sendMessage({ jobId: message.jobId, target: "offscreen", type: "offscreen:cancel" });
-        return updateQueueItem(message.jobId, "canceled", 0);
+        return readQueue();
       case "queue:update": {
         const previous = (await readQueue()).items.find((item) => item.job.id === message.jobId);
         const queue = await updateQueueItem(message.jobId, message.status, message.progress, message.error);

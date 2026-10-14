@@ -1,4 +1,6 @@
 import { buildFilename } from "./filename.ts";
+import { capturedHlsSelections } from "./hls.ts";
+import { scopedHeaders } from "./media.ts";
 import type {
   CapturedHeader,
   CapturedResource,
@@ -20,6 +22,23 @@ function replayHeaders(
     headers.push({ name: "Referer", value: resource.referer ?? pageUrl });
   }
   return headers;
+}
+
+function withHlsRenditionHeaders(
+  resources: readonly CapturedResource[],
+  resource: CapturedResource,
+  pageUrl: string,
+): CapturedResource {
+  const rendition = resource.hlsRendition;
+  if (!rendition || resource.headers !== undefined) return resource;
+  const master = resources.find((item) => item.kind === "hls"
+    && item.url === rendition.masterUrl
+    && item.frameId === resource.frameId && item.documentId === resource.documentId);
+  if (!master) throw new Error("Выбранная аудиодорожка больше не доступна для этого источника.");
+  return {
+    ...resource,
+    headers: scopedHeaders(replayHeaders(master, pageUrl), master.url, resource.url),
+  };
 }
 
 export function resourceScore(resource: CapturedResource): number {
@@ -77,11 +96,13 @@ function downloadInput(
   if (!["audio", "dash", "hls", "video"].includes(resource.kind)) {
     throw new Error("Ресурс не является входной медиадорожкой");
   }
-  const kind = resource.kind as DownloadInput["kind"];
+  const kind = resource.hlsRendition
+    ? "hls"
+    : resource.kind as DownloadInput["kind"];
   return {
     headers: replayHeaders(resource, pageUrl),
     kind,
-    role: overrides.role ?? (kind === "audio" ? "audio" : "media"),
+    role: overrides.role ?? (resource.kind === "audio" ? "audio" : "media"),
     url: resource.url,
     ...(overrides.name || resource.name
       ? { name: overrides.name ?? resource.name }
@@ -210,6 +231,31 @@ export function planYummyJobs(request: {
   }));
 }
 
+export function audioResourcesForSource(
+  resources: readonly CapturedResource[],
+  sourceId: string,
+): CapturedResource[] {
+  const source = resources.find((item) => item.id === sourceId);
+  if (!source) return [];
+  const selections = capturedHlsSelections(resources, source);
+  const selected = selections.length === 1 ? selections[0] : undefined;
+  return resources.filter((item) => {
+    if (item.kind !== "audio") return false;
+    if (!item.hlsRendition) return source.kind !== "hls" && !source.hlsRendition;
+    return selected !== undefined
+      && item.frameId === source.frameId
+      && item.documentId === source.documentId
+      && item.hlsRendition.masterUrl === selected.masterUrl
+      && item.hlsRendition.groupId === selected.audioGroup;
+  });
+}
+
+export function defaultAudioSelection(resources: readonly CapturedResource[]): string[] {
+  return resources
+    .filter((item) => !item.hlsRendition || item.default)
+    .map((item) => item.id);
+}
+
 export function buildCurrentJob(
   state: TabState,
   sourceId: string,
@@ -219,16 +265,23 @@ export function buildCurrentJob(
 ): DownloadJob {
   const source = state.resources.find((resource) => resource.id === sourceId);
   if (!source) throw new Error("Выбранный поток больше не доступен");
-  return buildDownloadJob({
-    audio: state.resources.filter(
-      (resource) =>
-        audioIds.includes(resource.id) &&
-        resource.id !== sourceId &&
-        resource.kind === "audio",
-    ),
+  const selections = capturedHlsSelections(state.resources, source);
+  if (selections.length > 1) {
+    throw new Error("Выберите основной HLS-плейлист: этот поток используется несколькими источниками.");
+  }
+  const availableAudio = audioResourcesForSource(state.resources, sourceId);
+  if (audioIds.some((id) => !availableAudio.some((item) => item.id === id))) {
+    throw new Error("Выбранная аудиодорожка больше не доступна для этого источника.");
+  }
+  const selected = selections[0];
+
+  const job = buildDownloadJob({
+    audio: availableAudio
+      .filter((item) => audioIds.includes(item.id) && item.id !== sourceId)
+      .map((item) => withHlsRenditionHeaders(state.resources, item, state.page.url)),
     container,
     pageUrl: state.page.url,
-    source,
+    source: withHlsRenditionHeaders(state.resources, source, state.page.url),
     subtitles: state.resources.filter(
       (resource) =>
         subtitleIds.includes(resource.id) && resource.kind === "subtitle",
@@ -237,6 +290,14 @@ export function buildCurrentJob(
     title: state.page.title,
     ...(state.page.yummy ? { episode: state.page.yummy.episode } : {}),
   });
+
+  if (selected) {
+    const input = job.inputs[0]!;
+    input.headers = scopedHeaders(input.headers, source.url, selected.url);
+    input.url = selected.url;
+  }
+
+  return job;
 }
 
 export function providerFromName(value: string): Provider {

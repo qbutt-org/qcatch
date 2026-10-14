@@ -14,6 +14,7 @@ import {
 import type { InputAudioTrack, InputTrack, InputVideoTrack, StreamTargetChunk } from "mediabunny";
 import { dashToHls, parseDashManifest } from "../shared/dash.ts";
 import { bestHlsVariant, hlsIsEncrypted, parseHlsMaster } from "../shared/hls.ts";
+import { scopedHeaders } from "../shared/media.ts";
 import type { CapturedHeader, DownloadInput, DownloadJob, DownloadSubtitle } from "../shared/types.ts";
 
 const WORK_DIRECTORY = "qcatch";
@@ -41,8 +42,7 @@ function requestHeaders(headers: CapturedHeader[]): Headers {
 }
 
 async function checkedFetch(url: string, source: { url: string; headers: CapturedHeader[] }, init: RequestInit = {}): Promise<Response> {
-  const sameOrigin = new URL(url).origin === new URL(source.url).origin;
-  const mergedHeaders = requestHeaders(source.headers.filter((header) => sameOrigin || /^(?:accept|range)$/i.test(header.name)));
+  const mergedHeaders = requestHeaders(scopedHeaders(source.headers, source.url, url));
   new Headers(init.headers).forEach((value, name) => mergedHeaders.set(name, value));
   const response = await fetch(url, {
     ...init,
@@ -149,35 +149,26 @@ async function writeResponse(
 
 async function stageHlsInput(
   source: DownloadInput,
-  directory: FileSystemDirectoryHandle,
-  name: string,
+  handle: FileSystemFileHandle,
+  writable: FileSystemWritableFileStream,
   signal: AbortSignal,
   onProgress: (value: number) => void,
 ): Promise<PreparedInput> {
   const playlist = await mediaPlaylist(source, signal);
   const media = hlsSegments(playlist.body, playlist.url);
   if (media.segments.length === 0) throw new Error("HLS-плейлист не содержит медиасегментов");
-  const handle = await directory.getFileHandle(name, { create: true });
-  const writable = await handle.createWritable({ keepExistingData: false });
-  try {
-    if (media.init) await writeResponse(writable, media.init, source, signal);
-    for (let index = 0; index < media.segments.length; index += 1) {
-      if (signal.aborted) throw new Error("Загрузка отменена");
-      await writeResponse(writable, media.segments[index]!, source, signal);
-      onProgress((index + 1) / media.segments.length);
-    }
-    await writable.close();
-  } catch (error) {
-    await writable.abort().catch(() => undefined);
-    await directory.removeEntry(name).catch(() => undefined);
-    throw error;
+  if (media.init) await writeResponse(writable, media.init, source, signal);
+  for (let index = 0; index < media.segments.length; index += 1) {
+    signal.throwIfAborted();
+    await writeResponse(writable, media.segments[index]!, source, signal);
+    onProgress((index + 1) / media.segments.length);
   }
+  await writable.close();
   const file = await handle.getFile();
   return {
     input: new Input({ formats: ALL_FORMATS, source: new BlobSource(file) }),
     role: source.role,
     ...(source.name ? { name: source.name } : {}),
-    cleanup: () => directory.removeEntry(name).catch(() => undefined),
   };
 }
 
@@ -335,12 +326,21 @@ async function prepareSubtitles(
   return writers;
 }
 
-async function executeInLockstep(conversions: Conversion[]): Promise<void> {
+async function settleMediaWork(work: Promise<void>[], cancel: () => void): Promise<void> {
+  const results = await Promise.allSettled(work.map((operation) => operation.catch((error: unknown) => {
+    cancel();
+    throw error;
+  })));
+  const failed = results.find((result) => result.status === "rejected");
+  if (failed) throw failed.reason;
+}
+
+async function executeInLockstep(conversions: Conversion[], cancel: () => void): Promise<void> {
   const step = 2;
   for (let until = step; ; until += step) {
     const active = conversions.filter((conversion) => conversion.state !== "done");
     if (active.length === 0) return;
-    await Promise.all(active.map((conversion) => conversion.execute({ until })));
+    await settleMediaWork(active.map((conversion) => conversion.execute({ until })), cancel);
     await new Promise((resolve) => window.setTimeout(resolve, 0));
   }
 }
@@ -353,43 +353,49 @@ function humanError(error: unknown): string {
   return message || "Не удалось собрать видео";
 }
 
-async function opfsFile(jobId: string): Promise<{
-  directory: FileSystemDirectoryHandle;
-  handle: FileSystemFileHandle;
-  name: string;
-  writable: FileSystemWritableFileStream;
-}> {
-  const root = await navigator.storage.getDirectory();
-  const directory = await root.getDirectoryHandle(WORK_DIRECTORY, { create: true });
-  const name = `${jobId}.partial`;
-  const handle = await directory.getFileHandle(name, { create: true });
-  const writable = await handle.createWritable({ keepExistingData: false });
-  return { directory, handle, name, writable };
-}
-
 async function notify(jobId: string, status: "canceled" | "completed" | "downloading" | "failed" | "saving", progress: number, error?: string): Promise<void> {
   await chrome.runtime.sendMessage({ jobId, progress, status, type: "queue:update", ...(error ? { error } : {}) });
 }
 
 export async function runDownload(job: DownloadJob, signal: AbortSignal): Promise<void> {
-  let temporary: Awaited<ReturnType<typeof opfsFile>> | undefined;
   const prepared: PreparedInput[] = [];
   const conversions: Conversion[] = [];
+  const ownedFiles: string[] = [];
+  const writers: FileSystemWritableFileStream[] = [];
+  const cleanupErrors: string[] = [];
+  const cancellations: Promise<void>[] = [];
+  let directory: FileSystemDirectoryHandle | undefined;
   let output: Output | undefined;
+  let status: "canceled" | "completed" | "failed" = "completed";
+  let errorMessage: string | undefined;
+
   const cancel = () => {
-    for (const conversion of conversions) void conversion.cancel();
-    for (const item of prepared) item.input.dispose();
-    void output?.cancel();
+    for (const conversion of conversions) {
+      if (conversion.state === "done" || conversion.state === "canceled") continue;
+      const pending = conversion.cancel().catch((error: unknown) => {
+        cleanupErrors.push(humanError(error));
+      });
+      cancellations.push(pending);
+    }
   };
   signal.addEventListener("abort", cancel, { once: true });
   try {
-    if (signal.aborted) throw new Error("Загрузка отменена");
-    await chrome.runtime.sendMessage({ job, type: "engine:prepare" });
+    signal.throwIfAborted();
+    const replay = await chrome.runtime.sendMessage({ job, type: "engine:prepare" }) as { error?: string } | undefined;
+    if (replay?.error) throw new Error(replay.error);
+    signal.throwIfAborted();
     await notify(job.id, "downloading", 0);
-    temporary = await opfsFile(job.id);
+
+    const root = await navigator.storage.getDirectory();
+    directory = await root.getDirectoryHandle(WORK_DIRECTORY, { create: true });
+    const outputName = `${job.id}.partial`;
+    const outputHandle = await directory.getFileHandle(outputName, { create: true });
+    ownedFiles.push(outputName);
+    const writable = await outputHandle.createWritable({ keepExistingData: false });
+    writers.push(writable);
     output = new Output({
       format: job.container === "mp4" ? new Mp4OutputFormat({ fastStart: false }) : new MkvOutputFormat(),
-      target: new StreamTarget(temporary.writable as unknown as WritableStream<StreamTargetChunk>, {
+      target: new StreamTarget(writable as unknown as WritableStream<StreamTargetChunk>, {
         chunked: true,
         chunkSize: 8 * 1024 * 1024,
       }),
@@ -398,15 +404,23 @@ export async function runDownload(job: DownloadJob, signal: AbortSignal): Promis
 
     for (let index = 0; index < job.inputs.length; index += 1) {
       const source = job.inputs[index]!;
-      const input = source.kind === "hls"
-        ? await stageHlsInput(
+      let input: PreparedInput;
+      if (source.kind === "hls") {
+        const inputName = `${job.id}.input-${index}.media`;
+        const inputHandle = await directory.getFileHandle(inputName, { create: true });
+        ownedFiles.push(inputName);
+        const inputWritable = await inputHandle.createWritable({ keepExistingData: false });
+        writers.push(inputWritable);
+        input = await stageHlsInput(
           source,
-          temporary.directory,
-          `${job.id}.input-${index}.media`,
+          inputHandle,
+          inputWritable,
           signal,
           (value) => void notify(job.id, "downloading", ((index + value) / job.inputs.length) * 0.35),
-        )
-        : await prepareInput(source, signal);
+        );
+      } else {
+        input = await prepareInput(source, signal);
+      }
       prepared.push(input);
       signal.throwIfAborted();
       if (job.expectedDuration) {
@@ -439,22 +453,22 @@ export async function runDownload(job: DownloadJob, signal: AbortSignal): Promis
         void notify(job.id, "downloading", Number.isFinite(total) ? 0.35 + total * 0.61 : 0.35);
       };
       conversions.push(conversion);
+      signal.throwIfAborted();
     }
 
     const subtitleWriters = await prepareSubtitles(output, job.subtitles, signal);
     if (!output.hasEnoughTracks()) throw new Error("В выбранном источнике нет совместимых видео- или аудиодорожек");
     await output.start();
-
-    if (signal.aborted) cancel();
-    await Promise.all([
-      executeInLockstep(conversions),
+    signal.throwIfAborted();
+    await settleMediaWork([
+      executeInLockstep(conversions, cancel),
       ...subtitleWriters.map((write) => write()),
-    ]);
-    if (signal.aborted) throw new Error("Загрузка отменена");
+    ], cancel);
+    signal.throwIfAborted();
     await output.finalize();
 
     await notify(job.id, "saving", 0.98);
-    const file = await temporary.handle.getFile();
+    const file = await outputHandle.getFile();
     const mimeType = job.container === "mkv" ? "video/x-matroska"
       : job.inputs.every((input) => input.role === "audio") ? "audio/mp4" : "video/mp4";
     const objectUrl = URL.createObjectURL(file.slice(0, file.size, mimeType));
@@ -464,20 +478,59 @@ export async function runDownload(job: DownloadJob, signal: AbortSignal): Promis
     } finally {
       URL.revokeObjectURL(objectUrl);
     }
-    await temporary.directory.removeEntry(temporary.name);
-    temporary = undefined;
-    await notify(job.id, "completed", 1);
   } catch (error) {
-    if (output && output.state !== "canceled" && output.state !== "finalized") await output.cancel().catch(() => undefined);
-    if (temporary) await temporary.directory.removeEntry(temporary.name).catch(() => undefined);
-    if (signal.aborted) await notify(job.id, "canceled", 0);
-    else await notify(job.id, "failed", 0, humanError(error));
+    status = signal.aborted ? "canceled" : "failed";
+    if (status === "failed") errorMessage = humanError(error);
   } finally {
     signal.removeEventListener("abort", cancel);
-    for (const item of prepared) {
-      item.input.dispose();
-      await item.cleanup?.();
+    cancel();
+    await Promise.all(cancellations);
+    if (output && output.state !== "finalized") {
+      try {
+        await output.cancel();
+      } catch (error) {
+        cleanupErrors.push(humanError(error));
+      }
     }
-    await chrome.runtime.sendMessage({ type: "engine:release" }).catch(() => undefined);
+    for (const writer of writers) {
+      // A started StreamTarget retains its lock after its awaited output close.
+      if (writer.locked) continue;
+      try {
+        await writer.abort();
+      } catch (error) {
+        cleanupErrors.push(humanError(error));
+      }
+    }
+    for (const item of prepared) {
+      try {
+        item.input.dispose();
+      } catch (error) {
+        cleanupErrors.push(humanError(error));
+      }
+      try {
+        await item.cleanup?.();
+      } catch (error) {
+        cleanupErrors.push(humanError(error));
+      }
+    }
+    for (const name of ownedFiles) {
+      try {
+        await directory!.removeEntry(name);
+      } catch (error) {
+        cleanupErrors.push(humanError(error));
+      }
+    }
+    try {
+      const result = await chrome.runtime.sendMessage({ type: "engine:release" }) as { error?: string } | undefined;
+      if (result?.error) throw new Error(result.error);
+    } catch (error) {
+      cleanupErrors.push(humanError(error));
+    }
   }
+
+  if (cleanupErrors.length > 0) {
+    status = "failed";
+    errorMessage = "Не удалось удалить временные файлы загрузки.\n" + cleanupErrors.join("\n");
+  }
+  await notify(job.id, status, status === "completed" ? 1 : 0, errorMessage);
 }

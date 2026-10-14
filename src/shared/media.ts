@@ -71,6 +71,15 @@ export function normalizedHeaders(
   return result;
 }
 
+export function scopedHeaders(
+  headers: readonly CapturedHeader[],
+  sourceUrl: string,
+  targetUrl: string,
+): CapturedHeader[] {
+  const sameOrigin = new URL(sourceUrl).origin === new URL(targetUrl).origin;
+  return headers.filter((header) => sameOrigin || /^(?:accept|range)$/i.test(header.name));
+}
+
 export function resourceKey(url: string): string {
   const stableUrl = url.replace(/([?&](?:_t|cache|rnd|timestamp)=)[^&]*/gi, "$1");
   let hash = 2166136261;

@@ -1,9 +1,11 @@
 import { render } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import {
+  audioResourcesForSource,
   bestResource,
   buildCurrentJob,
   compareResources,
+  defaultAudioSelection,
 } from "../shared/jobs.ts";
 import type {
   CapturedResource,
@@ -26,6 +28,7 @@ import {
   EpisodePicker,
   fileSize,
   ToggleList,
+  trackLabel,
   YummySourcePicker,
 } from "./selection.tsx";
 import { ProductActions } from "./products.tsx";
@@ -101,8 +104,8 @@ function UniversalApp() {
   );
   const audio = useMemo(
     () =>
-      (state?.resources ?? []).filter((resource) => resource.kind === "audio"),
-    [state?.revision],
+      audioResourcesForSource(state?.resources ?? [], sourceId),
+    [state?.revision, sourceId],
   );
   const subtitles = useMemo(
     () =>
@@ -141,17 +144,11 @@ function UniversalApp() {
 
         const best = bestResource(nextState.resources);
         const preferredSource = preferences?.sourceId;
-        setSourceId(
-          preferredSource &&
-            nextState.resources.some(
-              (resource) => resource.id === preferredSource,
-            )
-            ? preferredSource
-            : (best?.id ?? ""),
-        );
-        const nextAudio = nextState.resources.filter(
-          (resource) => resource.kind === "audio",
-        );
+        const nextSourceId = preferredSource &&
+          nextState.resources.some((resource) => resource.id === preferredSource)
+          ? preferredSource : (best?.id ?? "");
+        setSourceId(nextSourceId);
+        const nextAudio = audioResourcesForSource(nextState.resources, nextSourceId);
         const nextSubtitles = nextState.resources.filter(
           (resource) => resource.kind === "subtitle",
         );
@@ -163,7 +160,7 @@ function UniversalApp() {
               ? preferences.audioIds.filter((id) =>
                   nextAudio.some((resource) => resource.id === id),
                 )
-              : nextAudio.map((resource) => resource.id),
+              : defaultAudioSelection(nextAudio),
           ),
         );
         setSubtitleIds(
@@ -253,10 +250,12 @@ function UniversalApp() {
     )
       setSourceId(best?.id ?? "");
     if (!audioTouched)
-      setAudioIds(new Set(audio.map((resource) => resource.id)));
+      setAudioIds(new Set(defaultAudioSelection(audio)));
+    else
+      setAudioIds((previous) => new Set([...previous].filter((id) => audio.some((item) => item.id === id))));
     if (!subtitlesTouched)
       setSubtitleIds(new Set(subtitles.map((resource) => resource.id)));
-  }, [state?.revision, audioTouched, subtitlesTouched]);
+  }, [state?.revision, sourceId, audioTouched, subtitlesTouched]);
 
   useEffect(() => {
     if (!ready || !state || tabId === undefined) return;
@@ -522,7 +521,9 @@ function UniversalApp() {
               >
                 {primary.map((resource) => (
                   <option value={resource.id} key={resource.id}>
-                    {resource.name || providerName(resource, t("Источник"))} [{quality(resource)}]
+                    {resource.hlsRendition
+                      ? trackLabel(resource, language)
+                      : `${resource.name || providerName(resource, t("Источник"))} [${quality(resource)}]`}
                     {resource.episode !== undefined ? ` ${t("Серия {number}", { number: resource.episode })}` : ""}
                     {frames.length > 1 ? ` ${t("Плеер {number}", { number: frames.indexOf(resource.frameId) + 1 })}` : ""}
                   </option>

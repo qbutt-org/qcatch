@@ -215,6 +215,11 @@ const english = {
     "This HLS playlist has too many nested levels.",
   "HLS-плейлист не содержит медиасегментов":
     "This HLS playlist contains no media segments.",
+  "Выберите основной HLS-плейлист: этот поток используется несколькими источниками.":
+    "Select the main HLS playlist: this stream belongs to more than one source.",
+  "Выбранная аудиодорожка больше не доступна для этого источника.":
+    "The selected audio track is no longer available for this source.",
+  "Не удалось удалить временные файлы загрузки.": "Could not remove temporary download files.",
   "Загрузка отменена": "Download canceled.",
   "В выбранном источнике нет совместимых видео- или аудиодорожек":
     "This source has no compatible video or audio tracks.",
@@ -347,6 +352,10 @@ export function errorTranslation(
   language: Language,
   detail: string,
 ): { message: string; detail?: string } {
+  const cleanup = detail.match(/^Не удалось удалить временные файлы загрузки\.\n([\s\S]+)$/);
+  if (cleanup) {
+    return { message: translate(language, "Не удалось удалить временные файлы загрузки."), detail: cleanup[1]! };
+  }
   if (detail === "capture_expired") {
     return { message: translate(language, "Выбранное видео изменилось или передача устарела. Откройте qcatch и передайте видео заново.") };
   }

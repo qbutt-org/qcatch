@@ -75,7 +75,7 @@ export async function updateQueueItem(
   return mutateQueue((queue) => {
     const index = queue.items.findIndex((candidate) => candidate.job.id === jobId);
     const item = queue.items[index];
-    if (!item) return false;
+    if (!item || ["canceled", "failed"].includes(item.status)) return false;
     if (status === "completed") {
       queue.items.splice(index, 1);
       return true;

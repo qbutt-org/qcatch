@@ -45,6 +45,11 @@ export type CapturePayload = {
 
 export type CapturedResource = CapturePayload & {
   documentId?: string;
+  hlsRendition?: {
+    channels?: number;
+    groupId: string;
+    masterUrl: string;
+  };
   frameId: number;
   id: string;
   tabId: number;

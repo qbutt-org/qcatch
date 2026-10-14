@@ -21,8 +21,25 @@ export function fileSize(bytes: number, language: "ru" | "en"): string {
   return `${Math.max(1, Math.round(bytes / 1024 ** 2))} ${language === "ru" ? "МБ" : "MB"}`;
 }
 
-function trackLabel(resource: CapturedResource): string {
-  if (resource.name) return resource.name;
+export function trackLabel(resource: CapturedResource, language: "ru" | "en"): string {
+  let name = resource.name;
+  if (resource.hlsRendition && resource.language) {
+    try {
+      const languageName = new Intl.DisplayNames([language], { type: "language" }).of(resource.language);
+      if (languageName) {
+        if (!name || /^stream_\d+$/i.test(name) || name === languageName) {
+          name = languageName;
+        } else {
+          name = `${languageName} [${name}]`;
+        }
+      }
+    } catch {
+      // Keep the source name when its language code is invalid.
+    }
+    const channels = resource.hlsRendition.channels;
+    if (name && channels) name += ` [${channels}${language === "ru" ? " кан." : "ch"}]`;
+  }
+  if (name) return name;
   try {
     return decodeURIComponent(
       new URL(resource.url).pathname.split("/").pop() ?? resource.kind,
@@ -38,6 +55,7 @@ export function ToggleList(props: {
   selected: Set<string>;
   title: string;
 }) {
+  const { language } = useLanguage();
   if (props.resources.length === 0) return null;
   return (
     <details class="tracks" open={props.resources.length <= 2}>
@@ -60,7 +78,7 @@ export function ToggleList(props: {
                 props.onChange(next);
               }}
             />
-            <span title={trackLabel(resource)}>{trackLabel(resource)}</span>
+            <span title={trackLabel(resource, language)}>{trackLabel(resource, language)}</span>
           </label>
         ))}
       </div>

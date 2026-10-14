@@ -71,7 +71,15 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
   } else if (candidate.type === "offscreen:cancel") {
     const index = pending.findIndex((job) => job.id === candidate.jobId);
     if (index >= 0) pending.splice(index, 1);
-    controllers.get(candidate.jobId)?.abort();
+    const controller = controllers.get(candidate.jobId);
+    if (controller) {
+      controller.abort();
+    } else {
+      void chrome.runtime.sendMessage({ jobId: candidate.jobId, progress: 0, status: "canceled", type: "queue:update" })
+        .then(() => sendResponse({ accepted: true }))
+        .catch((error: unknown) => sendResponse({ error: error instanceof Error ? error.message : String(error) }));
+      return true;
+    }
   }
   sendResponse({ accepted: true });
   return false;

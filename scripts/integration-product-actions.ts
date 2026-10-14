@@ -1,11 +1,16 @@
+import { addQueueJobs, readQueue, replaceQueueJob, updateQueueItem } from "../src/background/queue.ts";
+import type { DownloadJob, QueueStatus } from "../src/shared/types.ts";
+import { runDownload } from "../src/offscreen/download.ts";
 import { handleIntegration, resolveCapture } from "../src/background/integration.ts";
 import { removeProductActions } from "../src/background/product-actions.ts";
 import { addCapture, readTabState, updatePage } from "../src/background/state.ts";
 import type { IntegrationMessage, ProductAction, ProductSelection } from "../src/shared/integration.ts";
 import { NATIVE_BRIDGE_URL } from "../src/shared/native.ts";
+import { audioResourcesForSource, buildCurrentJob, defaultAudioSelection } from "../src/shared/jobs.ts";
 
 // Runs production background/session handlers against isolated browser metadata and
-// a real loopback HTTP fixture. It never connects to the installed helper or fetches media.
+// a real loopback HTTP fixture, plus the production downloader with generated HLS and injected OPFS faults.
+// It never connects to the installed helper or fetches external media.
 const tabId = 71;
 const pageUrl = "https://example.org/sintel";
 const mediaUrl = "https://media.w3.org/2010/05/sintel/trailer.mp4";
@@ -35,13 +40,25 @@ function deferred() {
 let reply: { body: unknown; status?: number; entered?: ReturnType<typeof deferred>; release?: ReturnType<typeof deferred> } | undefined;
 let storageGate: { entered: ReturnType<typeof deferred>; release: ReturnType<typeof deferred> } | undefined;
 let tabReadHook: (() => void) | undefined;
+let runtimeHook: ((message: { type: string; status?: string; error?: string }) => Promise<unknown>) | undefined;
+let mediaGate: { entered: ReturnType<typeof deferred>; release: ReturnType<typeof deferred> } | undefined;
 
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
   async fetch(request) {
-    check(request.headers.get("X-Qcatch") === "1", "Native request lost its extension marker");
     const path = new URL(request.url).pathname;
+    if (path === "/cleanup-fixture.m3u8") {
+      return new Response("#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\ncleanup-fixture.ts\n#EXT-X-ENDLIST", {
+        headers: { "Content-Type": "application/x-mpegurl" },
+      });
+    }
+    if (path === "/cleanup-fixture.ts") {
+      mediaGate!.entered.resolve();
+      await mediaGate!.release.promise;
+      return new Response(new Uint8Array());
+    }
+    check(request.headers.get("X-Qcatch") === "1", "Native request lost its extension marker");
     if (path === "/health") {
       return Response.json({ protocol: 1, version: "fixture", desktopPath: "fixture", qplayInstalled: installed,
         qbuttInstalled: installed, tools: { status: "ready" } });
@@ -113,7 +130,9 @@ Object.defineProperty(globalThis, "chrome", { value: {
     return [];
   } },
   action: { async setBadgeBackgroundColor() {}, async setBadgeText() {} },
-  runtime: { async sendMessage() {} },
+  runtime: { async sendMessage(message: { type: string; status?: string; error?: string }) {
+    return runtimeHook?.(message);
+  } },
 } });
 
 async function state(): Promise<ProductAction[]> {
@@ -216,6 +235,176 @@ try {
     frames.get(5)!.documentId = "replacement-audio-document";
     await rejected(resolveCapture(payload.pageUrl, { captureId: payload.captureId }), "capture_expired");
     frames.get(5)!.documentId = "document-5";
+  });
+
+  await scenario("clear-hls-relative-renditions-and-exact-audio", async () => {
+    const masterUrl = "https://media.example.org/hls/master.m3u8";
+    const masterBody = [
+      "#EXTM3U",
+      '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="main",NAME="English",LANGUAGE="en",CHANNELS="2",DEFAULT=YES,URI="audio/en.m3u8"',
+      '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="main",NAME="French",LANGUAGE="fr",URI="audio/fr.m3u8"',
+      '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="low",NAME="German",LANGUAGE="de",CHANNELS="6",DEFAULT=YES,URI="audio/de.m3u8"',
+      '#EXT-X-STREAM-INF:BANDWIDTH=1800000,RESOLUTION=768x576,AUDIO="main"',
+      "video/high.m3u8",
+      '#EXT-X-STREAM-INF:BANDWIDTH=400000,RESOLUTION=320x240,AUDIO="low"',
+      "video/low.m3u8",
+    ].join("\n");
+    await addCapture(tabId, 20, {
+      kind: "hls", url: "https://media.example.org/hls/audio/fr.m3u8",
+      provider: "unknown", detectedAt: Date.now(),
+      headers: [{ name: "Authorization", value: "generated-child-session" }],
+    }, "document-20");
+    frames.set(20, { url: "https://example.org/player/20", documentId: "document-20", media: [masterUrl] });
+    frames.set(21, { url: "https://example.org/player/21", documentId: "document-21", media: [masterUrl] });
+    await addCapture(tabId, 21, {
+      kind: "hls", url: masterUrl, provider: "unknown", detectedAt: Date.now(),
+      headers: [{ name: "Authorization", value: "generated-master-session" }],
+    }, "document-21");
+    for (const frameId of [20, 21]) {
+      await addCapture(tabId, frameId, {
+        kind: "hls", url: masterUrl, body: masterBody, provider: "unknown", detectedAt: Date.now(),
+      }, "document-" + frameId);
+    }
+    await addCapture(tabId, 21, {
+      kind: "audio", url: "https://media.example.org/unrelated.mp3",
+      provider: "unknown", detectedAt: Date.now(),
+    }, "document-21");
+    let captured = await readTabState(tabId);
+    const headerFirstMaster = captured.resources.find((item) => item.url === masterUrl && item.frameId === 21)!;
+    const unplayedFrench = audioResourcesForSource(captured.resources, headerFirstMaster.id)
+      .find((item) => item.language === "fr")!;
+    const headerFirstJob = buildCurrentJob(captured, headerFirstMaster.id, [unplayedFrench.id], [], "mkv");
+    check(headerFirstJob.inputs.every((item) => item.headers.some((header) => header.name === "Authorization"
+      && header.value === "generated-master-session")),
+    "A body-only master capture lost earlier request headers for an unplayed rendition");
+    await addCapture(tabId, 21, {
+      kind: "hls", url: masterUrl, provider: "unknown", detectedAt: Date.now(),
+      headers: [{ name: "Authorization", value: "generated-refreshed-master-session" }],
+    }, "document-21");
+    captured = await readTabState(tabId);
+    const refreshedMasterJob = buildCurrentJob(captured, headerFirstMaster.id, [unplayedFrench.id], [], "mkv");
+    check(refreshedMasterJob.inputs.every((item) => item.headers.some((header) => header.name === "Authorization"
+      && header.value === "generated-refreshed-master-session")),
+    "An unplayed rendition retained stale inherited master headers");
+    await addCapture(tabId, 21, {
+      kind: "hls", url: unplayedFrench.url, provider: "unknown", detectedAt: Date.now(),
+      headers: [
+        { name: "Authorization", value: "generated-observed-child-session" },
+        { name: "Referer", value: "https://media.example.org/private-child?generated-child-referer" },
+      ],
+      referer: "https://media.example.org/private-child?generated-child-referer",
+    }, "document-21");
+    await addCapture(tabId, 21, {
+      kind: "hls", url: masterUrl, body: masterBody, provider: "unknown", detectedAt: Date.now(),
+      headers: [{ name: "Authorization", value: "generated-newest-master-session" }],
+    }, "document-21");
+    captured = await readTabState(tabId);
+    const observedChildJob = buildCurrentJob(captured, headerFirstMaster.id, [unplayedFrench.id], [], "mkv");
+    check(observedChildJob.inputs[0]?.headers.some((header) => header.value === "generated-newest-master-session")
+      && observedChildJob.inputs[1]?.headers.some((header) => header.value === "generated-observed-child-session"),
+    "A master refresh replaced an observed child's own request headers");
+    await addCapture(tabId, 21, {
+      kind: "hls", url: unplayedFrench.url, provider: "unknown", detectedAt: Date.now(), headers: [],
+    }, "document-21");
+    captured = await readTabState(tabId);
+    const clearedChildJob = buildCurrentJob(captured, headerFirstMaster.id, [unplayedFrench.id], [], "mkv");
+    check(!clearedChildJob.inputs[1]?.headers.some((header) => header.name === "Authorization"
+      || header.value.includes("generated-child-referer")),
+      "An observed empty child request retained old private headers or inherited master credentials");
+    const master = captured.resources.find((item) => item.url === masterUrl && item.frameId === 20)!;
+    const audio = audioResourcesForSource(captured.resources, master.id);
+    check(audio.length === 2 && audio.every((item) => item.frameId === 20 && item.hlsRendition?.groupId === "main"),
+      "HLS audio crossed a frame or group boundary");
+    check(defaultAudioSelection(audio).length === 1
+      && audio.find((item) => item.id === defaultAudioSelection(audio)[0])?.language === "en",
+    "HLS default ignored the authoritative rendition");
+    const unrelatedAudio = captured.resources.find((item) => item.url.endsWith("/unrelated.mp3"))!;
+    await rejected(Promise.resolve().then(() => buildCurrentJob(captured, master.id, [unrelatedAudio.id], [], "mkv")),
+      "аудиодорожка больше не доступна");
+    const french = audio.find((item) => item.language === "fr")!;
+    check(french.headers?.some((header) => header.name === "Authorization" && header.value === "generated-child-session"),
+      "Master discovery lost an earlier child playlist request header");
+    const german = captured.resources.find((item) => item.frameId === 20 && item.language === "de")!;
+    check(audio.find((item) => item.language === "en")?.hlsRendition?.channels === 2
+      && german.hlsRendition?.channels === 6, "HLS rendition channel counts were lost");
+    const hlsSelection = { tabId, pageUrl, sourceId: master.id, audioIds: [french.id], subtitleIds: [] };
+    const job = buildCurrentJob(captured, master.id, [french.id], [], "mkv");
+    check(job.inputs.length === 2 && job.inputs[0]?.url === "https://media.example.org/hls/video/high.m3u8"
+      && job.inputs[1]?.url === "https://media.example.org/hls/audio/fr.m3u8"
+      && job.inputs[1]?.kind === "hls" && job.inputs[1]?.role === "audio",
+    "HLS job lost the exact maximum video or explicitly selected nondefault audio");
+    await rejected(Promise.resolve().then(() => buildCurrentJob(captured, master.id, [german.id], [], "mkv")),
+      "аудиодорожка больше не доступна");
+    const audioOnly = buildCurrentJob(captured, french.id, [french.id], [], "mkv");
+    check(audioOnly.inputs.length === 1 && audioOnly.inputs[0]?.role === "audio"
+      && audioOnly.inputs[0]?.kind === "hls", "Selecting an HLS audio rendition added or lost a track");
+    await addCapture(tabId, 20, {
+      kind: "hls", url: "https://media.example.org/hls/video/low.m3u8",
+      provider: "unknown", detectedAt: Date.now(),
+    }, "document-20");
+    captured = await readTabState(tabId);
+    const low = captured.resources.find((item) => item.url.endsWith("/video/low.m3u8"))!;
+    const lowAudio = audioResourcesForSource(captured.resources, low.id).filter((item) => item.hlsRendition);
+    check(lowAudio.length === 1 && lowAudio[0]?.id === german.id,
+      "An explicitly selected variant inherited another variant's audio group");
+    await rejected(Promise.resolve().then(() => buildCurrentJob(captured, low.id, [french.id], [], "mkv")),
+      "аудиодорожка больше не доступна");
+    await addCapture(tabId, 20, {
+      kind: "hls", url: "https://media.example.org/hls/other-master.m3u8",
+      body: masterBody, provider: "unknown", detectedAt: Date.now(),
+    }, "document-20");
+    captured = await readTabState(tabId);
+    check(audioResourcesForSource(captured.resources, master.id).filter((item) => item.hlsRendition).length === 2,
+      "An exact master accepted another master's rendition");
+    await rejected(Promise.resolve().then(() => buildCurrentJob(captured, low.id, [german.id], [], "mkv")),
+      "основной HLS-плейлист");
+    await addCapture(tabId, 20, {
+      kind: "hls", url: french.url, provider: "unknown", detectedAt: Date.now(),
+      headers: [{ name: "Accept", value: "application/vnd.apple.mpegurl" }],
+    }, "document-20");
+    captured = await readTabState(tabId);
+    const refreshed = captured.resources.filter((item) => item.url === french.url && item.frameId === 20);
+    check(refreshed.length === 2 && new Set(refreshed.map((item) => item.id)).size === 2
+      && refreshed.some((item) => item.id === french.id) && refreshed.every((item) => item.hlsRendition),
+      "A child playlist request duplicated or detached its rendition");
+    const action = await send(hlsSelection, "watch");
+    check(action.status === "sent", "HLS capture did not reach the existing native handoff");
+    const payload = JSON.parse(Buffer.from(new URL(posts.at(-1)!.body.uri as string).searchParams.get("d")!,
+      "base64url").toString()) as { captureId: string; pageUrl: string };
+    const resolved = await resolveCapture(payload.pageUrl, { captureId: payload.captureId });
+    check(resolved.url === job.inputs[0]!.url && "audioUrl" in resolved && resolved.audioUrl === french.url,
+      "HLS capture resolved another video or language");
+    await addCapture(tabId, 20, {
+      kind: "hls", url: masterUrl, body: masterBody.split("\n").filter((line) => !line.includes('NAME="French"')).join("\n"),
+      provider: "unknown", detectedAt: Date.now(),
+    }, "document-20");
+    check(!(await readTabState(tabId)).resources.some((item) => item.id === french.id),
+      "Master refresh retained a removed audio rendition");
+    await rejected(resolveCapture(payload.pageUrl, { captureId: payload.captureId }), "capture_expired");
+    await addCapture(tabId, 20, {
+      kind: "hls", url: "https://media.example.org/hls/private-master.m3u8",
+      referer: "https://media.example.org/private-share?generated-private-session",
+      body: masterBody.replace("video/high.m3u8", "https://video.example.org/high.m3u8")
+        .replace("audio/fr.m3u8", "https://audio.example.org/fr.m3u8"),
+      headers: [
+        { name: "Authorization", value: "generated-session" },
+        { name: "X-Source-Session", value: "generated-session" },
+        { name: "Referer", value: "https://media.example.org/private-share?generated-private-session" },
+        { name: "Accept", value: "application/vnd.apple.mpegurl" },
+      ],
+      provider: "unknown", detectedAt: Date.now(),
+    }, "document-20");
+    captured = await readTabState(tabId);
+    const privateMaster = captured.resources.find((item) => item.url.endsWith("/private-master.m3u8"))!;
+    const privateFrench = audioResourcesForSource(captured.resources, privateMaster.id)
+      .find((item) => item.hlsRendition && item.language === "fr")!;
+    const crossOrigin = buildCurrentJob(captured, privateMaster.id, [privateFrench.id], [], "mkv");
+    check(crossOrigin.inputs.every((item) => !item.headers.some((header) => /^(?:authorization|x-)/i.test(header.name))),
+      "A cross-origin HLS child inherited the master's private headers");
+    check(crossOrigin.inputs.every((item) => !item.headers.some((header) => header.value.includes("generated-private-session"))),
+      "A cross-origin HLS child inherited the master request referer");
+    check(crossOrigin.inputs.every((item) => item.headers.some((header) => header.name === "Accept")),
+      "Cross-origin HLS children lost safe request headers");
   });
 
   await scenario("definite-native-rejection-explicit-retry", async () => {
@@ -358,6 +547,76 @@ try {
     tabUrl = "https://www.youtube.com/watch?v=bbbbbbbbbbb";
     frames.get(0)!.url = tabUrl;
     check((await send({ ...youtube, pageUrl: tabUrl }, "play")).status === "sent" && posts.length === before + 2, "A new SPA video reused the previous action");
+  });
+
+  await scenario("hls-cancel-cleanup-failure-stays-visible-after-drain", async () => {
+    const job: DownloadJob = {
+      container: "mkv", createdAt: Date.now(), filename: "cleanup-fixture.mkv", id: "cleanup-fault",
+      inputs: [{ headers: [], kind: "hls", role: "media", url: NATIVE_BRIDGE_URL + "/cleanup-fixture.m3u8" }],
+      pageUrl, subtitles: [], tabId, title: "Generated cleanup fixture",
+    };
+    await addQueueJobs([job], "downloading");
+    const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+    const files = new Set<string>();
+    const events: string[] = [];
+    const controller = new AbortController();
+    mediaGate = { entered: deferred(), release: deferred() };
+    Object.defineProperty(globalThis, "navigator", { configurable: true, value: { storage: {
+      async getDirectory() {
+        return { async getDirectoryHandle() {
+          return {
+            async getFileHandle(name: string) {
+              files.add(name);
+              return { async createWritable() {
+                return new WritableStream({ abort() { events.push("abort:" + name); } });
+              } };
+            },
+            async removeEntry(name: string) {
+              events.push("remove:" + name);
+              if (name.endsWith(".partial")) throw new Error("Injected output cleanup failure");
+              files.delete(name);
+            },
+          };
+        } };
+      },
+    } } });
+    runtimeHook = async (message) => {
+      if (message.type === "engine:release") events.push("release");
+      if (message.type === "queue:update" && message.status) {
+        await updateQueueItem(job.id, message.status as QueueStatus, 0, message.error);
+      }
+      if (message.type !== "queue:update" || !["canceled", "completed", "failed"].includes(message.status ?? "")) return;
+      events.push("terminal:" + message.status);
+      check(message.status === "failed" && message.error?.includes("Injected output cleanup failure"),
+        "Cleanup failure was hidden behind a successful cancellation or completion");
+      check(events.includes("remove:cleanup-fault.input-0.media") && events.includes("release"),
+        "Terminal status preceded staging cleanup or replay release");
+    };
+    try {
+      const downloading = runDownload(job, controller.signal);
+      await mediaGate.entered.promise;
+      controller.abort();
+      await downloading;
+      check(events.includes("abort:cleanup-fault.partial") && events.includes("abort:cleanup-fault.input-0.media"),
+        "Cancellation did not close the pending output and staging writers");
+      check(files.size === 1 && files.has("cleanup-fault.partial"),
+        "An output cleanup failure prevented cleanup of the other owned staging files");
+      check(events.at(-1) === "terminal:failed", "Cleanup did not own the final terminal notification");
+      await updateQueueItem(job.id, "downloading", 0.75);
+      await updateQueueItem(job.id, "canceled", 0);
+      const failed = (await readQueue()).items.find((item) => item.job.id === job.id)!;
+      check(failed.status === "failed" && failed.error?.includes("Injected output cleanup failure"),
+        "Late progress or cancellation erased a terminal cleanup failure");
+      await replaceQueueJob(job.id, job);
+      check((await readQueue()).items.find((item) => item.job.id === job.id)?.status === "queued",
+        "Preserving terminal state blocked an explicit queue retry");
+    } finally {
+      mediaGate.release.resolve();
+      mediaGate = undefined;
+      runtimeHook = undefined;
+      if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
+      else Reflect.deleteProperty(globalThis, "navigator");
+    }
   });
 
   console.log(JSON.stringify({ status: "passed", scenarios: passed, nativePosts: posts.length,

@@ -1,3 +1,5 @@
+import type { CapturedResource } from "./types.ts";
+
 export type HlsVariant = {
   audioGroup?: string;
   bandwidth: number;
@@ -9,6 +11,7 @@ export type HlsVariant = {
 };
 
 export type HlsRendition = {
+  channels?: number;
   default: boolean;
   forced: boolean;
   groupId: string;
@@ -62,7 +65,9 @@ export function parseHlsMaster(body: string, baseUrl: string): HlsMaster {
       if (!groupId || !name) continue;
       const url = attributes.get("URI");
       const language = attributes.get("LANGUAGE");
+      const channels = attributes.get("CHANNELS")?.match(/^([1-9]\d*)(?:\/|$)/)?.[1];
       renditions.push({
+        ...(channels ? { channels: Number(channels) } : {}),
         default: yes(attributes.get("DEFAULT")),
         forced: yes(attributes.get("FORCED")),
         groupId,
@@ -105,4 +110,36 @@ export function bestHlsVariant(variants: readonly HlsVariant[]): HlsVariant | un
 
 export function hlsIsEncrypted(body: string): boolean {
   return /#EXT-X-KEY:[^\n]*METHOD=(?!NONE(?:,|$))/i.test(body);
+}
+
+export function capturedHlsSelections(resources: readonly CapturedResource[], source: CapturedResource): Array<{
+  audioGroup?: string;
+  masterUrl: string;
+  url: string;
+}> {
+  if (source.hlsRendition) {
+    return [{
+      audioGroup: source.hlsRendition.groupId,
+      masterUrl: source.hlsRendition.masterUrl,
+      url: source.url,
+    }];
+  }
+  const selections = [];
+  for (const master of resources) {
+    if (master.kind !== "hls" || !master.body?.includes("#EXT-X-STREAM-INF")
+      || master.frameId !== source.frameId || master.documentId !== source.documentId) continue;
+    const parsed = parseHlsMaster(master.body, master.url);
+    const variant = master.id === source.id
+      ? bestHlsVariant(parsed.variants)
+      : parsed.variants.find((item) => item.url === source.url);
+    if (!variant) continue;
+    const selected = {
+      masterUrl: master.url,
+      url: variant.url,
+      ...(variant.audioGroup ? { audioGroup: variant.audioGroup } : {}),
+    };
+    if (master.id === source.id) return [selected];
+    selections.push(selected);
+  }
+  return selections;
 }
