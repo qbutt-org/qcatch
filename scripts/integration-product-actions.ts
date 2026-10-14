@@ -53,7 +53,7 @@ const server = Bun.serve({
         headers: { "Content-Type": "application/x-mpegurl" },
       });
     }
-    if (path === "/cleanup-fixture.ts") {
+    if (path === "/cleanup-fixture.ts" || path === "/cleanup-fixture.mp4") {
       mediaGate!.entered.resolve();
       await mediaGate!.release.promise;
       return new Response(new Uint8Array());
@@ -407,6 +407,47 @@ try {
       "Cross-origin HLS children lost safe request headers");
   });
 
+  await scenario("static-dash-capture-and-exact-external-subtitle", async () => {
+    const manifestUrl = "https://media.example.org/dash/manifest.mpd";
+    const body = `<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT12S">
+  <Period>
+    <AdaptationSet contentType="video">
+      <SegmentTemplate initialization="init-$RepresentationID$.m4s" media="chunk-$RepresentationID$-$Number$.m4s" duration="2" />
+      <Representation id="maximum" width="640" height="360" bandwidth="1000000" />
+      <Representation id="lower" width="320" height="180" bandwidth="5000000" />
+    </AdaptationSet>
+    <AdaptationSet contentType="audio" lang="eng">
+      <SegmentTemplate initialization="init-audio.m4s" media="audio-$Number$.m4s" duration="2" />
+      <Representation id="audio" bandwidth="128000" />
+    </AdaptationSet>
+  </Period>
+</MPD>`;
+    await addCapture(tabId, 30, {
+      kind: "dash", url: manifestUrl, provider: "unknown", detectedAt: Date.now(),
+      headers: [{ name: "Authorization", value: "generated-dash-session" }],
+    }, "document-30");
+    await addCapture(tabId, 30, {
+      kind: "dash", url: manifestUrl, body, provider: "unknown", detectedAt: Date.now(),
+    }, "document-30");
+    for (const language of ["en", "ru"]) {
+      await addCapture(tabId, 30, {
+        kind: "subtitle", url: `https://media.example.org/dash/${language}.vtt`,
+        language, name: language === "ru" ? "Русский" : "English", default: language === "en",
+        provider: "unknown", detectedAt: Date.now(),
+      }, "document-30");
+    }
+    const captured = await readTabState(tabId);
+    const source = captured.resources.find((item) => item.url === manifestUrl)!;
+    const subtitle = captured.resources.find((item) => item.url === "https://media.example.org/dash/ru.vtt")!;
+    const job = buildCurrentJob(captured, source.id, [], [subtitle.id], "mkv");
+    check(source.body === body && job.inputs.length === 1 && job.inputs[0]?.kind === "dash"
+      && job.inputs[0]?.url === manifestUrl && job.inputs[0]?.headers.some((header) => header.value === "generated-dash-session"),
+    "A DASH body-only capture lost the selected MPD or its observed request headers");
+    check(job.subtitles.length === 1 && job.subtitles[0]?.url === subtitle.url
+      && job.subtitles[0]?.language === "ru" && job.subtitles[0]?.name === "Русский",
+    "DASH download included an unselected subtitle or lost selected language metadata");
+  });
+
   await scenario("definite-native-rejection-explicit-retry", async () => {
     reply = { body: { error: "Injected native rejection" }, status: 503 };
     const before = posts.length;
@@ -549,10 +590,10 @@ try {
     check((await send({ ...youtube, pageUrl: tabUrl }, "play")).status === "sent" && posts.length === before + 2, "A new SPA video reused the previous action");
   });
 
-  await scenario("hls-cancel-cleanup-failure-stays-visible-after-drain", async () => {
+  for (const kind of ["hls", "video"] as const) await scenario(`${kind}-cancel-cleanup-failure-stays-visible-after-drain`, async () => {
     const job: DownloadJob = {
-      container: "mkv", createdAt: Date.now(), filename: "cleanup-fixture.mkv", id: "cleanup-fault",
-      inputs: [{ headers: [], kind: "hls", role: "media", url: NATIVE_BRIDGE_URL + "/cleanup-fixture.m3u8" }],
+      container: "mkv", createdAt: Date.now(), filename: "cleanup-fixture.mkv", id: `cleanup-fault-${kind}`,
+      inputs: [{ headers: [], kind, role: "media", url: NATIVE_BRIDGE_URL + (kind === "hls" ? "/cleanup-fixture.m3u8" : "/cleanup-fixture.mp4") }],
       pageUrl, subtitles: [], tabId, title: "Generated cleanup fixture",
     };
     await addQueueJobs([job], "downloading");
@@ -589,7 +630,7 @@ try {
       events.push("terminal:" + message.status);
       check(message.status === "failed" && message.error?.includes("Injected output cleanup failure"),
         "Cleanup failure was hidden behind a successful cancellation or completion");
-      check(events.includes("remove:cleanup-fault.input-0.media") && events.includes("release"),
+      check((kind !== "hls" || events.includes(`remove:${job.id}.input-0.media`)) && events.includes("release"),
         "Terminal status preceded staging cleanup or replay release");
     };
     try {
@@ -597,9 +638,9 @@ try {
       await mediaGate.entered.promise;
       controller.abort();
       await downloading;
-      check(events.includes("abort:cleanup-fault.partial") && events.includes("abort:cleanup-fault.input-0.media"),
+      check(events.includes(`abort:${job.id}.partial`) && (kind !== "hls" || events.includes(`abort:${job.id}.input-0.media`)),
         "Cancellation did not close the pending output and staging writers");
-      check(files.size === 1 && files.has("cleanup-fault.partial"),
+      check(files.size === 1 && files.has(`${job.id}.partial`),
         "An output cleanup failure prevented cleanup of the other owned staging files");
       check(events.at(-1) === "terminal:failed", "Cleanup did not own the final terminal notification");
       await updateQueueItem(job.id, "downloading", 0.75);

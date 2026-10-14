@@ -377,6 +377,14 @@ export async function runDownload(job: DownloadJob, signal: AbortSignal): Promis
       });
       cancellations.push(pending);
     }
+    // Input.dispose also ends reads that are still probing metadata.
+    for (const item of prepared) {
+      try {
+        item.input.dispose();
+      } catch (error) {
+        cleanupErrors.push(humanError(error));
+      }
+    }
   };
   signal.addEventListener("abort", cancel, { once: true });
   try {
@@ -502,11 +510,6 @@ export async function runDownload(job: DownloadJob, signal: AbortSignal): Promis
       }
     }
     for (const item of prepared) {
-      try {
-        item.input.dispose();
-      } catch (error) {
-        cleanupErrors.push(humanError(error));
-      }
       try {
         await item.cleanup?.();
       } catch (error) {
