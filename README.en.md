@@ -74,11 +74,11 @@ Bun is required; the Windows helper also requires Rust and Visual Studio Build T
 bun install --frozen-lockfile
 bun run check
 bun run bridge:build
-bun run release:build -- v1.0.0
+bun run release:build -- v1.1.0
 ```
 
 See the [architecture](docs/ARCHITECTURE.md) and [project rules](AGENTS.md).
 
 ## License
 
-qcatch is distributed under [AGPL-3.0-or-later](LICENSE). Third-party licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). qcatch source is available from the [v1.0.0 tag](https://github.com/qbutt-org/qcatch/tree/v1.0.0); exact dependency sources are available in a separate [technical archive](https://github.com/qbutt-org/qcatch/releases/download/v1.0.0-sources/qcatch-1.0.0-runtime-sources.zip).
+qcatch is distributed under [AGPL-3.0-or-later](LICENSE). Third-party licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). qcatch source is available from the [v1.1.0 tag](https://github.com/qbutt-org/qcatch/tree/v1.1.0); exact dependency sources are available in a separate [technical archive](https://github.com/qbutt-org/qcatch/releases/download/v1.1.0-sources/qcatch-1.1.0-runtime-sources.zip).
