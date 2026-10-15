@@ -13,6 +13,7 @@ export interface Capture {
     url: string;
     body?: string;
     contentType?: string;
+    status?: number;
     mediaElement?: boolean;
     initiator?: string;
     requestUrl?: string;

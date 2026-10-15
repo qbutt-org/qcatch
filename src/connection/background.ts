@@ -383,7 +383,12 @@ async function hlsPlaylist(probe: Probe, url: string, visited = new Set<string>(
     if (visited.has(url) || visited.size >= 4) throw new Error("Плеер вернул зацикленный HLS-манифест.");
     visited.add(url);
     credentials = probe.requests.get(url)?.credentials ?? credentials;
-    let body = probe.resources.get(url)?.body;
+    const captured = probe.resources.get(url);
+    if (captured?.status !== undefined && (captured.status < 200 || captured.status >= 300)) {
+        throw new SourceError([401, 403, 429].includes(captured.status) ? "verification_required" : "selection_unavailable",
+            "Выбранное качество видео недоступно. Обновите источник и повторите действие.");
+    }
+    let body = captured?.body;
     let finalUrl = url;
     if (!body) {
         const response = await fetchManifest(probe, url, credentials);
@@ -534,7 +539,9 @@ async function resolve(command: BrowserCommand, controller: AbortController) {
         await commandFrame(probe, { type: "capture:start" });
         await delay(7_000, controller.signal);
         await confirmSelection(probe, sourceUrl);
-        const candidates = (await Promise.all([...probe.resources.values()].slice(0, 24).map((resource) => mediaCandidate(probe, resource)))).filter((value) => value !== undefined);
+        const resources = [...probe.resources.values()];
+        const available = resources.filter(resource => resource.status === undefined || resource.status >= 200 && resource.status < 300);
+        const candidates = (await Promise.all(available.slice(0, 24).map(resource => mediaCandidate(probe, resource)))).filter(value => value !== undefined);
         const byUrl = new Map<string, NonNullable<typeof candidates[number]>>();
         for (const candidate of candidates) {
             if (!byUrl.has(candidate.url) || candidate.master) byUrl.set(candidate.url, candidate);
@@ -547,6 +554,12 @@ async function resolve(command: BrowserCommand, controller: AbortController) {
         if (!pool.length) {
             const problem = await commandFrame(probe, { type: "problem" });
             if (problem?.error) throw new SourceError(problem.code, problem.error, sourceUrl);
+            const failed = resources.find(resource => resource.status !== undefined && (resource.status < 200 || resource.status >= 300)
+                && classifyMedia(resource.url, resource.contentType, resource.body) !== "unknown");
+            if (failed) {
+                throw new SourceError([401, 403, 429].includes(failed.status!) ? "verification_required" : "selection_unavailable",
+                    `Плеер вернул HTTP ${failed.status}. Обновите источник и повторите действие.`, sourceUrl);
+            }
         }
         if (pool.length !== 1) {
             throw new SourceError(pool.length ? "selection_unavailable" : "media_unavailable", pool.length ? "Плеер вернул несколько потоков. Откройте нужную серию в источнике и повторите действие."
@@ -627,15 +640,19 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         if (probe.ready && !probe.selected.ambiguous && sender.frameId === probe.selected.id) respond({ capture: true });
         return;
     }
-    if (!probe.ready || probe.selected.ambiguous || sender.frameId !== probe.selected.id) return;
+    if (!probe.ready || probe.selected.ambiguous || sender.frameId !== probe.selected.id
+        || !probe.selected.documentId || sender.documentId !== probe.selected.documentId) return;
     if (message?.type !== "capture" || !message.payload || typeof message.payload.url !== "string") return;
     try {
         const payload = message.payload as Capture;
         publicUrl(payload.url);
-        if (payload.body && payload.body.length > 512 * 1024 || probe.resources.size >= 128) return;
+        if (typeof payload.body === "string" && payload.body.length > 512 * 1024
+            || payload.status !== undefined && (!Number.isInteger(payload.status) || payload.status < 0 || payload.status > 599)
+            || probe.resources.size >= 128 && !probe.resources.has(payload.url)) return;
         const previous = probe.resources.get(payload.url);
-        const body = payload.body || previous?.body;
-        probe.resources.set(payload.url, { ...previous, ...payload, mediaElement: !!(payload.mediaElement || previous?.mediaElement), ...(body ? { body } : {}) });
+        const body = payload.body ?? (payload.status === undefined ? previous?.body ?? "" : "");
+        probe.resources.set(payload.url, { ...previous, ...payload, body,
+            mediaElement: !!(payload.mediaElement || previous?.mediaElement) });
     } catch { /* Captured page data is untrusted. */ }
 });
 

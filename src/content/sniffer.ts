@@ -24,8 +24,9 @@ function post(payload: CapturePayload): void {
   if (window.name === "qbutt:player") {
     const previous = probeCaptures.get(payload.url);
     if (probeCaptures.size < 24 || previous) {
-      const body = payload.body || previous?.body;
-      probeCaptures.set(payload.url, { ...previous, ...payload, ...(body ? { body } : {}) });
+      // Response metadata starts a new body; URL-only observations do not.
+      const body = payload.body ?? (payload.status === undefined ? previous?.body ?? "" : "");
+      probeCaptures.set(payload.url, { ...previous, ...payload, body });
     }
   }
   window.postMessage({ channel: CAPTURE_CHANNEL, payload }, "*");

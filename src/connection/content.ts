@@ -118,6 +118,7 @@ window.addEventListener("message", (event: MessageEvent) => {
     const contentType = typeof payload.contentType === "string" ? payload.contentType.slice(0, 256) : "";
     void chrome.runtime.sendMessage({ type: "capture", payload: {
         url: payload.url, body, contentType, mediaElement, initiator: location.href,
+        ...(payload.status !== undefined ? { status: payload.status } : {}),
     } }).catch(() => undefined);
 });
 

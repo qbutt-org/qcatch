@@ -2,7 +2,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BrowserCommand, BrowserResponse } from "../src/shared/connection.ts";
-import { CAPTURE_FRAME_NAME } from "../src/connection/media.ts";
+import { CAPTURE_FRAME_NAME, type Capture } from "../src/connection/media.ts";
 
 // Exercise the production native dispatch, owned-tab lifecycle and MAIN-world
 // resolver against a real local HTTP server and generated H.264/AAC media.
@@ -34,7 +34,7 @@ let mode = "normal";
 let nextTab = 10;
 let nativeMessage!: (command: BrowserCommand) => void;
 let frameMessage!: (
-  message: { type: string; frameName: string; directChild: boolean },
+  message: { type: string; frameName?: string; directChild?: boolean; payload?: Capture },
   sender: { tab: { id: number }; frameId: number; documentId: string; url: string },
   respond: (reply?: { capture?: boolean }) => void,
 ) => void;
@@ -47,10 +47,15 @@ let inMainWorld = false;
 let documentAbort = new AbortController();
 let releaseResponse: (() => void) | undefined;
 let enteredRequest: (() => void) | undefined;
-const deadline = setTimeout(() => { throw new Error("Browser resolution integration exceeded 60 seconds"); }, 60_000);
+const deadline = setTimeout(() => { throw new Error("Browser resolution integration exceeded 120 seconds"); }, 120_000);
 const allohaUrl = "https://alloha.example.org/?season=1&episode=2&translation=42";
 const masterUrl = "https://media.example.org/master.m3u8";
 const playlistUrl = "https://media.example.org/720.m3u8";
+const masterBody = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100000,RESOLUTION=640x360\n360.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=500000,RESOLUTION=1280x720\n720.m3u8\n";
+const mediaBody = "#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nhttps://media.example.org/720.mp4\n#EXT-X-ENDLIST\n";
+const manifestRequests: string[] = [];
+const statusSequences: { scenario: string; statuses: number[] }[] = [];
+let masterResponses = 0;
 
 const server = Bun.serve({
   hostname: "127.0.0.1",
@@ -58,6 +63,10 @@ const server = Bun.serve({
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname.endsWith(".m3u8")) {
+      if (url.pathname.startsWith("/denied-") || mode === "maximum-denied" && url.pathname === "/720.m3u8"
+        || mode === "cached-body-replaced" && url.pathname === "/master.m3u8" && ++masterResponses === 1) {
+        return new Response("<!doctype html><html>Forbidden</html>", { status: 403, headers: { "Content-Type": "text/html" } });
+      }
       if (request.headers.get("Origin") !== "https://alloha.example.org" || request.headers.get("Referer") !== allohaUrl) {
         return new Response("Missing source browser context", { status: 403 });
       }
@@ -66,7 +75,7 @@ const server = Bun.serve({
         await new Promise<void>(resolve => { releaseResponse = resolve; });
       }
       return new Response(mode === "manifest-large" ? " ".repeat(512 * 1024 + 1)
-        : "#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nhttps://media.example.org/720.mp4\n#EXT-X-ENDLIST\n", {
+        : url.pathname === "/master.m3u8" ? masterBody : mediaBody, {
         headers: { "Content-Type": "application/vnd.apple.mpegurl" },
       });
     }
@@ -98,6 +107,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   check(["vkvideo.ru", "media.example.org"].includes(url.hostname), "Unexpected external fixture request");
   if (url.pathname === "/al_video.php") check(init?.credentials === "include", "VK lookup lost browser session");
   if (inMainWorld && url.pathname.endsWith(".m3u8")) {
+    manifestRequests.push(url.pathname);
     check(init?.credentials === "same-origin", "Anonymous cross-origin HLS acquired an unrelated credential mode");
     init = { ...init, headers: { ...init?.headers, Origin: "https://alloha.example.org", Referer: allohaUrl },
       signal: AbortSignal.any([init!.signal!, documentAbort.signal]) };
@@ -129,6 +139,16 @@ function announceFrame(tabId: number, url: string, frameId: number, frameName: s
     capture = reply?.capture === true;
   });
   return capture;
+}
+
+function capture(tabId: number, resource: Capture, frameId = 7, documentId = `document-${frameId}`): void {
+  frameMessage({ type: "capture", payload: { initiator: allohaUrl, ...resource } },
+    { tab: { id: tabId }, frameId, documentId, url: allohaUrl }, () => undefined);
+}
+
+async function browserResponse(url: string): Promise<Capture> {
+  const response = await fetch(url, { headers: { Origin: "https://alloha.example.org", Referer: allohaUrl } });
+  return { url, status: response.status, contentType: response.headers.get("Content-Type") ?? "", body: await response.text() };
 }
 
 Object.defineProperty(globalThis, "chrome", { value: {
@@ -175,11 +195,45 @@ Object.defineProperty(globalThis, "chrome", { value: {
         requestHeaders({ tabId, frameId: 7, url: masterUrl, requestHeaders: [
           { name: "Origin", value: "https://alloha.example.org" }, { name: "Referer", value: allohaUrl },
         ] });
-        (frameMessage as Function)({ type: "capture", payload: { url: masterUrl, contentType: "application/vnd.apple.mpegurl",
-          body: "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100000,RESOLUTION=640x360\n360.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=500000,RESOLUTION=1280x720\n720.m3u8\n",
-          initiator: allohaUrl } }, { tab: { id: tabId }, frameId: 7, documentId: "document-7", url: allohaUrl }, () => undefined);
+        if (mode === "late-success" || mode === "cached-body-replaced" || mode === "cached-denied") {
+          const denied = await browserResponse(mode === "cached-body-replaced" ? masterUrl : "https://media.example.org/denied-0.m3u8");
+          capture(tabId, denied);
+          // A successful response from another iframe or an obsolete document is not a fallback.
+          for (const [frameId, documentId] of [[2, "document-2"], [4, "document-4"], [7, "document-replaced"]] as const) {
+            capture(tabId, { url: playlistUrl, status: 200, body: mediaBody }, frameId, documentId);
+          }
+          for (const status of [-1, 200.5, 600, Number.NaN]) {
+            capture(tabId, { url: playlistUrl, status, body: mediaBody });
+          }
+          if (mode === "cached-denied") {
+            statusSequences.push({ scenario: mode, statuses: [denied.status!] });
+            return { started: true };
+          }
+          const occupied = mode === "cached-body-replaced" ? 128 : 25;
+          for (let index = 1; index < occupied; index++) {
+            capture(tabId, { ...denied, url: `https://media.example.org/denied-${index}.m3u8` });
+          }
+          await new Promise(resolve => setTimeout(resolve, 100));
+          const success = await browserResponse(masterUrl);
+          if (mode === "cached-body-replaced") delete success.body;
+          capture(tabId, success);
+          capture(tabId, { url: masterUrl });
+          statusSequences.push({ scenario: mode, statuses: [denied.status!, success.status!] });
+        } else if (mode === "ambiguous-success") {
+          capture(tabId, await browserResponse(playlistUrl));
+          capture(tabId, await browserResponse("https://media.example.org/360.m3u8"));
+        } else {
+          capture(tabId, { url: masterUrl, status: 200, contentType: "application/vnd.apple.mpegurl", body: masterBody });
+          if (mode === "maximum-denied") {
+            const denied = await browserResponse(playlistUrl);
+            capture(tabId, denied);
+            capture(tabId, await browserResponse("https://media.example.org/360.m3u8"));
+            statusSequences.push({ scenario: mode, statuses: [200, denied.status!, 200] });
+          }
+        }
         return { started: true };
       }
+      if (message.type === "problem") return {};
       check(message.type === "ready", "Exact VK resolve fell back to generic player guessing");
       return { ready: true, url: target.frameId === 7 ? frames.get(tabId) : tabs.get(tabId)?.url };
     },
@@ -219,6 +273,8 @@ function resolve(url = sourceUrl, referrer?: string) {
 function reset() {
   mode = "normal";
   documentAbort = new AbortController();
+  manifestRequests.length = 0;
+  masterResponses = 0;
   params = { oid: -234920203, vid: 456239678, md_title: "Generated episode 2",
     url360: "https://media.example.org/360.mp4", url720: mediaUrl,
     subs: [{ title: "Russian", lang: "ru", url: "https://media.example.org/ru.vtt" }] };
@@ -307,6 +363,29 @@ try {
   check(tabs.size === 0, "HLS success leaked its helper tab");
   checks.push("captured HLS master -> exact-document MAIN child fetch with browser Origin/Referer -> maximum quality");
 
+  for (const successMode of ["late-success", "cached-body-replaced"]) {
+    reset();
+    mode = successMode;
+    const success = await resolveHls();
+    check(!success.error && (success.result as { url: string }).url === playlistUrl && tabs.size === 0,
+      `${successMode} did not select the later 2xx response of the exact document`);
+    check(!manifestRequests.some(path => path.startsWith("/denied-")), `${successMode} retried a captured 403`);
+    check(manifestRequests.filter(path => path === "/master.m3u8").length === (successMode === "cached-body-replaced" ? 1 : 0),
+      `${successMode} retained an old response body or refetched a captured manifest`);
+    checks.push(successMode === "late-success"
+      ? "25 cached 403 responses -> later exact-document 200 within capture deadline -> maximum HLS without retry"
+      : "full capture bound -> same-URL 403 body replaced by 200 metadata -> URL-only observation preserves status -> fresh exact-document body");
+  }
+  for (const [failureMode, code] of [["cached-denied", "verification_required"], ["maximum-denied", "verification_required"],
+    ["ambiguous-success", "selection_unavailable"]] as const) {
+    reset();
+    mode = failureMode;
+    const failure = await resolveHls();
+    check(failure.error?.code === code && !failure.result && tabs.size === 0, `${failureMode} returned media or lost its error/cleanup`);
+    check(manifestRequests.length === 0, `${failureMode} refetched a captured response or downgraded quality`);
+    checks.push(failureMode);
+  }
+
   for (const [failureMode, code] of [["manifest-large", "response_too_large"], ["manifest-document-changed", "selected_content_changed"]] as const) {
     reset();
     mode = failureMode;
@@ -324,7 +403,7 @@ try {
   check(manifestCanceled.error?.code === "canceled" && tabs.size === 0 && !inMainWorld, "Manifest cancellation did not drain its closed document");
   releaseResponse?.();
   checks.push("cancel MAIN manifest fetch -> close owned document -> drain injection before canceled reply");
-  await writeFile(join(output, "evidence.json"), JSON.stringify({ checks, mediaBytes: (await Bun.file(received).stat()).size }, null, 2));
+  await writeFile(join(output, "evidence.json"), JSON.stringify({ checks, statusSequences, mediaBytes: (await Bun.file(received).stat()).size }, null, 2));
   console.log(JSON.stringify({ passed: checks.length, evidence: join(output, "evidence.json") }));
 } finally {
   releaseResponse?.();
