@@ -16,7 +16,8 @@
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png"
     },
-    "default_title": "qcatch"
+    "default_title": "qcatch",
+    "default_popup": "popup/index.html"
   },
   "background": {
     "service_worker": "background/index.js",

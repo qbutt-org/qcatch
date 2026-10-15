@@ -74,7 +74,10 @@ async function updateActionPresentation(tab: chrome.tabs.Tab): Promise<void> {
   const service = oneClickService(tab.url);
   const language = await selectedLanguage();
   await Promise.all([
-    chrome.action.setPopup({ popup: "", tabId: tab.id }),
+    chrome.action.setPopup({
+      popup: service ? "" : "popup/index.html",
+      tabId: tab.id,
+    }),
     chrome.action.setTitle({
       tabId: tab.id,
       title: service
