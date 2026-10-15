@@ -173,6 +173,10 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     }
 });
 
-void chrome.runtime.sendMessage({ type: "frame:ready" }).then((response) => {
+void chrome.runtime.sendMessage({
+    type: "frame:ready",
+    frameName: window.name === CAPTURE_FRAME_NAME ? CAPTURE_FRAME_NAME : "",
+    directChild: window.parent === window.top,
+}).then((response) => {
     if (response?.capture) startCapture();
 }).catch(() => undefined);

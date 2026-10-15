@@ -2,6 +2,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BrowserCommand, BrowserResponse } from "../src/shared/connection.ts";
+import { CAPTURE_FRAME_NAME } from "../src/connection/media.ts";
 
 // Exercise the production native dispatch, owned-tab lifecycle and MAIN-world
 // resolver against a real local HTTP server and generated H.264/AAC media.
@@ -32,7 +33,14 @@ let params: Record<string, unknown>;
 let mode = "normal";
 let nextTab = 10;
 let nativeMessage!: (command: BrowserCommand) => void;
-let beforeRequest!: (details: unknown) => void;
+let frameMessage!: (
+  message: { type: string; frameName: string; directChild: boolean },
+  sender: { tab: { id: number }; frameId: number; url: string },
+  respond: (reply?: { capture?: boolean }) => void,
+) => void;
+let completedNavigation!: (details: {
+  tabId: number; type: string; parentFrameId: number; frameId: number; url: string; statusCode: number;
+}) => void;
 let nativeReply!: (response: BrowserResponse) => void;
 let releaseResponse: (() => void) | undefined;
 let enteredRequest: (() => void) | undefined;
@@ -88,10 +96,19 @@ const nativePort = {
   },
 };
 
+function announceFrame(tabId: number, url: string, frameId: number, frameName: string, directChild: boolean): boolean {
+  let capture = false;
+  frameMessage({ type: "frame:ready", frameName, directChild }, { tab: { id: tabId }, frameId, url }, reply => {
+    capture = reply?.capture === true;
+  });
+  return capture;
+}
+
 Object.defineProperty(globalThis, "chrome", { value: {
   runtime: {
     connectNative() { return nativePort; },
-    onMessage: unusedEvent, onStartup: unusedEvent, onInstalled: unusedEvent,
+    onMessage: { addListener(listener: typeof frameMessage) { frameMessage = listener; } },
+    onStartup: unusedEvent, onInstalled: unusedEvent,
   },
   alarms: { onAlarm: unusedEvent, async create() {} },
   windows: { async getAll() { return [{ id: 1, focused: true, incognito: false }]; } },
@@ -113,7 +130,16 @@ Object.defineProperty(globalThis, "chrome", { value: {
       if (message.type === "frame:mount") {
         frames.set(tabId, message.url!);
         page.href = message.url!;
-        beforeRequest({ tabId, type: "sub_frame", parentFrameId: 0, frameId: 7, url: message.url });
+        check(!announceFrame(tabId, message.url!, 2, "source-player", true), "Original iframe acquired our capture lease");
+        check(!announceFrame(tabId, message.url!, 4, CAPTURE_FRAME_NAME, false), "Nested iframe acquired our capture lease");
+        check(!announceFrame(tabId, "https://vkvideo.ru/video-1_2", 5, CAPTURE_FRAME_NAME, true), "Another URL acquired our capture lease");
+        completedNavigation({ tabId, type: "sub_frame", parentFrameId: 0, frameId: 2, url: message.url!, statusCode: 503 });
+        completedNavigation({ tabId, type: "sub_frame", parentFrameId: 0, frameId: 7, url: message.url!,
+          statusCode: mode === "failed-frame" ? 503 : 200 });
+        check(announceFrame(tabId, message.url!, 7, CAPTURE_FRAME_NAME, true), "Owned iframe did not acquire capture");
+        if (mode === "duplicate-frame") {
+          check(!announceFrame(tabId, message.url!, 8, CAPTURE_FRAME_NAME, true), "Two owned iframe identities were accepted");
+        }
         return { mounted: true };
       }
       check(message.type === "ready", "Exact VK resolve fell back to generic player guessing");
@@ -130,8 +156,8 @@ Object.defineProperty(globalThis, "chrome", { value: {
     return mode === "missing-script" ? [] : [{ result: await script.func(...script.args) }];
   } },
   webRequest: {
-    onBeforeRequest: { addListener(listener: typeof beforeRequest) { beforeRequest = listener; } },
-    onCompleted: unusedEvent, onBeforeSendHeaders: unusedEvent,
+    onCompleted: { addListener(listener: typeof completedNavigation) { completedNavigation = listener; } },
+    onBeforeSendHeaders: unusedEvent,
   },
 } });
 
@@ -178,6 +204,17 @@ try {
   check(forms.at(-1)?.get("access_key") === "fixture-access" && forms.at(-1)?.get("list") === "fixture-list", "VK access parameters were lost");
   check(!JSON.stringify(embedded.result).includes("fixture-access"), "Private access key leaked into descriptor");
   checks.push("exact Yummy iframe -> selected frame -> access_key/list -> canonical secret-free identity");
+  checks.push("original same-URL iframe and nested named iframe cannot replace the owned direct-child sender");
+
+  for (const rejectedMode of ["duplicate-frame", "failed-frame"]) {
+    reset();
+    mode = rejectedMode;
+    const rejected = await resolve(`https://vkvideo.ru/video_ext.php?oid=-234920203&id=456239678`, "https://yani.tv/");
+    check(rejected.error?.code === (rejectedMode === "duplicate-frame" ? "selection_unavailable" : "source_unavailable"),
+      `${rejectedMode} lost its exact failure category`);
+    check(!rejected.result && tabs.size === 0, `${rejectedMode} returned media or leaked the helper tab`);
+    checks.push(rejectedMode);
+  }
 
   for (const [name, mutate] of [
     ["wrong video", () => { params.vid = 999; }],

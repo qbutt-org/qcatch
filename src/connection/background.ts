@@ -1,6 +1,6 @@
 import { MAX_FETCH_BODY_BYTES, MAX_MESSAGE_BYTES, NATIVE_HOST, publicUrl, type BrowserCommand, type BrowserId, type BrowserResponse } from "../shared/connection.ts";
 import { bestHlsVariant, hlsIsEncrypted, parseHlsMaster } from "./hls.ts";
-import { classifyMedia, type Capture } from "./media.ts";
+import { CAPTURE_FRAME_NAME, classifyMedia, type Capture } from "./media.ts";
 import { resolveCapture } from "../background/integration.ts";
 import { vkSearchUrl } from "./vk-search.ts";
 import { libSession, LibSessionError } from "./lib-session.ts";
@@ -22,6 +22,7 @@ interface Probe {
     selected: Frame;
     resources: Map<string, Capture>;
     headers: Map<string, Record<string, string>>;
+    pendingFrameStatuses: Map<number, number>;
     controller: AbortController;
     ready: boolean;
 }
@@ -243,6 +244,7 @@ async function mountFrame(probe: Probe, url: string, sourceUrl: string): Promise
     probe.selected = { url };
     probe.resources.clear();
     probe.headers.clear();
+    probe.pendingFrameStatuses.clear();
     // Authorize only the requested child before document_start. Its initial
     // manifest request may finish before the player's DOM is ready.
     probe.ready = true;
@@ -438,7 +440,10 @@ async function resolve(command: BrowserCommand, controller: AbortController) {
     const tab = await backgroundTab("about:blank", controller.signal);
     if (tab.id === undefined) throw new Error("Не удалось открыть плеер в фоне.");
     const page: Frame = { id: 0, url: referrer };
-    const probe: Probe = { tabId: tab.id, page, selected: page, resources: new Map(), headers: new Map(), controller, ready: false };
+    const probe: Probe = {
+        tabId: tab.id, page, selected: page, resources: new Map(), headers: new Map(),
+        pendingFrameStatuses: new Map(), controller, ready: false,
+    };
     probes.set(tab.id, probe);
     try {
         controller.signal.throwIfAborted();
@@ -542,28 +547,42 @@ async function confirmSelection(probe: Probe, sourceUrl: string): Promise<void> 
     }
 }
 
-chrome.webRequest.onBeforeRequest.addListener((details): undefined => {
-    const probe = probes.get(details.tabId);
-    if (!probe || probe.selected === probe.page || details.type !== "sub_frame" || details.parentFrameId !== 0) return;
-    const expected = new URL(probe.selected.url);
-    expected.hash = "";
-    if (details.url !== expected.href) return;
-    if (probe.selected.id !== undefined && probe.selected.id !== details.frameId) probe.selected.ambiguous = true;
-    else probe.selected.id = details.frameId;
-    return undefined;
-}, { urls: ["http://*/*", "https://*/*"] });
-
 chrome.webRequest.onCompleted.addListener((details) => {
     const probe = probes.get(details.tabId);
     if (!probe || !["main_frame", "sub_frame"].includes(details.type)) return;
     if (details.frameId === 0) probe.page.status = details.statusCode;
     if (details.frameId === probe.selected.id) probe.selected.status = details.statusCode;
+    else if (probe.selected !== probe.page && probe.selected.id === undefined
+        && details.parentFrameId === 0 && details.url === probe.selected.url) {
+        // Navigation can complete before the isolated document announces ownership.
+        if (probe.pendingFrameStatuses.size >= 128 && !probe.pendingFrameStatuses.has(details.frameId)) {
+            probe.selected.ambiguous = true;
+        } else {
+            probe.pendingFrameStatuses.set(details.frameId, details.statusCode);
+        }
+    }
 }, { urls: ["http://*/*", "https://*/*"] });
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
     const probe = sender.tab?.id === undefined ? undefined : probes.get(sender.tab.id);
-    if (!probe?.ready || probe.selected.ambiguous || sender.frameId !== probe.selected.id || sender.url !== probe.selected.url) return;
-    if (message?.type === "frame:ready") { respond({ capture: true }); return; }
+    if (!probe?.ready || sender.url !== probe.selected.url) return;
+    if (message?.type === "frame:ready") {
+        if (probe.selected !== probe.page) {
+            if (message.frameName !== CAPTURE_FRAME_NAME || message.directChild !== true
+                || sender.frameId === undefined || sender.frameId <= 0) return;
+            if (probe.selected.id !== undefined && probe.selected.id !== sender.frameId) {
+                probe.selected.ambiguous = true;
+            } else {
+                probe.selected.id = sender.frameId;
+                const status = probe.pendingFrameStatuses.get(sender.frameId);
+                if (status !== undefined) probe.selected.status = status;
+                probe.pendingFrameStatuses.clear();
+            }
+        }
+        if (!probe.selected.ambiguous && sender.frameId === probe.selected.id) respond({ capture: true });
+        return;
+    }
+    if (probe.selected.ambiguous || sender.frameId !== probe.selected.id) return;
     if (message?.type !== "capture" || !message.payload || typeof message.payload.url !== "string") return;
     try {
         const payload = message.payload as Capture;
