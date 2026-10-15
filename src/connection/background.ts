@@ -8,12 +8,19 @@ import { cookies } from "./cookies.ts";
 import { boundedText, ResponseTooLargeError } from "./response.ts";
 import { parseVkVideoUrl } from "../shared/vk.ts";
 import { readVkVideo } from "../background/vk.ts";
+import { readManifest } from "./manifest.ts";
 
 interface Frame {
     url: string;
     id?: number;
     status?: number;
     ambiguous?: boolean;
+    documentId?: string;
+}
+
+interface CapturedRequest {
+    headers: Record<string, string>;
+    credentials: RequestCredentials;
 }
 
 interface Probe {
@@ -21,8 +28,9 @@ interface Probe {
     page: Frame;
     selected: Frame;
     resources: Map<string, Capture>;
-    headers: Map<string, Record<string, string>>;
+    requests: Map<string, CapturedRequest>;
     pendingFrameStatuses: Map<number, number>;
+    manifestTasks: Set<Promise<unknown>>;
     controller: AbortController;
     ready: boolean;
 }
@@ -243,7 +251,7 @@ async function commandFrame(probe: Probe, message: unknown): Promise<any> {
 async function mountFrame(probe: Probe, url: string, sourceUrl: string): Promise<void> {
     probe.selected = { url };
     probe.resources.clear();
-    probe.headers.clear();
+    probe.requests.clear();
     probe.pendingFrameStatuses.clear();
     // Authorize only the requested child before document_start. Its initial
     // manifest request may finish before the player's DOM is ready.
@@ -333,7 +341,38 @@ async function resolveFile(command: BrowserCommand, controller: AbortController)
     } finally { await chrome.tabs.remove(tab.id).catch(() => undefined); }
 }
 
-async function hlsPlaylist(probe: Probe, url: string, visited = new Set<string>()): Promise<{
+async function fetchManifest(probe: Probe, url: string, credentials: RequestCredentials) {
+    publicUrl(url);
+    await confirmSelection(probe, probe.page.url);
+    const documentId = probe.selected.documentId;
+    if (!documentId || probe.selected.ambiguous) {
+        throw new SourceError("selected_content_changed", "Документ выбранного плеера изменился.");
+    }
+    const pending = chrome.scripting.executeScript({
+        args: [url, probe.selected.url, probe.selected === probe.page ? "" : CAPTURE_FRAME_NAME, credentials],
+        func: readManifest,
+        target: { tabId: probe.tabId, documentIds: [documentId] },
+        world: "MAIN",
+    });
+    probe.manifestTasks.add(pending);
+    void pending.then(() => probe.manifestTasks.delete(pending), () => probe.manifestTasks.delete(pending));
+    const [injection] = await abortable(pending, probe.controller.signal);
+    probe.controller.signal.throwIfAborted();
+    await confirmSelection(probe, probe.page.url);
+    probe.controller.signal.throwIfAborted();
+    if (probe.selected.ambiguous || probe.selected.documentId !== documentId
+        || !injection || injection.documentId !== documentId || !injection.result) {
+        throw new SourceError("selected_content_changed", "Документ выбранного плеера изменился.");
+    }
+    const response = injection.result;
+    if ("error" in response) {
+        throw new SourceError(response.error, "Не удалось прочитать манифест выбранного плеера.");
+    }
+    publicUrl(response.url);
+    return response;
+}
+
+async function hlsPlaylist(probe: Probe, url: string, visited = new Set<string>(), credentials: RequestCredentials = "same-origin"): Promise<{
     url: string;
     audioUrl?: string;
     subtitles?: { title: string; url: string; language?: string }[];
@@ -343,14 +382,15 @@ async function hlsPlaylist(probe: Probe, url: string, visited = new Set<string>(
     publicUrl(url);
     if (visited.has(url) || visited.size >= 4) throw new Error("Плеер вернул зацикленный HLS-манифест.");
     visited.add(url);
+    credentials = probe.requests.get(url)?.credentials ?? credentials;
     let body = probe.resources.get(url)?.body;
     let finalUrl = url;
     if (!body) {
-        const response = await fetch(url, { credentials: "include", signal: probe.controller.signal });
-        if (!response.ok) throw new SourceError([401, 403, 429].includes(response.status) ? "verification_required" : "selection_unavailable",
+        const response = await fetchManifest(probe, url, credentials);
+        if (response.status < 200 || response.status >= 300) throw new SourceError([401, 403, 429].includes(response.status) ? "verification_required" : "selection_unavailable",
             "Выбранное качество видео недоступно. Обновите источник и повторите действие.");
         finalUrl = publicUrl(response.url);
-        body = await boundedText(response);
+        body = response.body;
     }
     if (!/^#EXTM3U/m.test(body)) throw new Error("Плеер не отдал HLS-манифест выбранного качества.");
     if (hlsIsEncrypted(body)) throw new Error("Зашифрованный поток не поддерживается.");
@@ -376,11 +416,11 @@ async function hlsPlaylist(probe: Probe, url: string, visited = new Set<string>(
         if (!segments || pendingSegment) throw new Error("HLS-манифест не содержит адресов видео.");
         return { url: finalUrl, family: [url, finalUrl], master: false };
     }
-    const selected = await hlsPlaylist(probe, best.url, new Set(visited));
+    const selected = await hlsPlaylist(probe, best.url, new Set(visited), credentials);
     const audio = best.audioGroup ? master.renditions.filter((item) => item.type === "audio" && item.groupId === best.audioGroup && item.url) : [];
     const selectedAudio = audio.length === 1 ? audio[0] : audio.find((item) => item.default);
     if (audio.length > 1 && !selectedAudio) throw new Error("Плеер не подтвердил выбранную аудиодорожку.");
-    const audioPlaylist = selectedAudio?.url ? await hlsPlaylist(probe, selectedAudio.url, new Set(visited)) : undefined;
+    const audioPlaylist = selectedAudio?.url ? await hlsPlaylist(probe, selectedAudio.url, new Set(visited), credentials) : undefined;
     const audioUrl = audioPlaylist?.url ?? selected.audioUrl;
     const renditions = master.renditions.flatMap((item) => item.url ? [publicUrl(item.url)] : []);
     return {
@@ -399,12 +439,12 @@ async function mediaCandidate(probe: Probe, resource: Capture) {
     let kind = classifyMedia(url, resource.contentType, body);
     if (kind === "hls" || kind === "dash") {
         if (!body) {
-            const response = await fetch(url, { credentials: "include", signal: probe.controller.signal });
-            if (!response.ok) throw new SourceError([401, 403, 429].includes(response.status) ? "verification_required" : "selection_unavailable",
+            const response = await fetchManifest(probe, url, probe.requests.get(url)?.credentials ?? "same-origin");
+            if (response.status < 200 || response.status >= 300) throw new SourceError([401, 403, 429].includes(response.status) ? "verification_required" : "selection_unavailable",
                 "Плеер не отдал выбранный поток. Обновите источник и повторите действие.");
             url = publicUrl(response.url);
-            body = await boundedText(response);
-            kind = classifyMedia(response.url, response.headers.get("content-type") ?? "", body);
+            body = response.body;
+            kind = classifyMedia(response.url, response.contentType, body);
         }
         if (kind === "hls") {
             probe.resources.set(url, { ...resource, url, body });
@@ -441,8 +481,8 @@ async function resolve(command: BrowserCommand, controller: AbortController) {
     if (tab.id === undefined) throw new Error("Не удалось открыть плеер в фоне.");
     const page: Frame = { id: 0, url: referrer };
     const probe: Probe = {
-        tabId: tab.id, page, selected: page, resources: new Map(), headers: new Map(),
-        pendingFrameStatuses: new Map(), controller, ready: false,
+        tabId: tab.id, page, selected: page, resources: new Map(), requests: new Map(),
+        pendingFrameStatuses: new Map(), manifestTasks: new Set(), controller, ready: false,
     };
     probes.set(tab.id, probe);
     try {
@@ -513,7 +553,7 @@ async function resolve(command: BrowserCommand, controller: AbortController) {
                 : "Плеер не отдал доступный поток. Откройте источник, запустите нужную серию и повторите действие.", sourceUrl);
         }
         const selected = pool[0]!;
-        const headers: Record<string, string> = { Referer: selected.resource.initiator ?? selectedUrl, ...probe.headers.get(selected.resource.url), "User-Agent": navigator.userAgent };
+        const headers: Record<string, string> = { Referer: selected.resource.initiator ?? selectedUrl, ...probe.requests.get(selected.resource.url)?.headers, "User-Agent": navigator.userAgent };
         const sessionCookies = await cookies(selected.url);
         if (sessionCookies.length) headers.Cookie = sessionCookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
         await confirmSelection(probe, sourceUrl);
@@ -526,6 +566,7 @@ async function resolve(command: BrowserCommand, controller: AbortController) {
     } finally {
         probes.delete(tab.id);
         await chrome.tabs.remove(tab.id).catch(() => undefined);
+        await Promise.allSettled(probe.manifestTasks);
     }
 }
 
@@ -565,7 +606,7 @@ chrome.webRequest.onCompleted.addListener((details) => {
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
     const probe = sender.tab?.id === undefined ? undefined : probes.get(sender.tab.id);
-    if (!probe?.ready || sender.url !== probe.selected.url) return;
+    if (!probe || sender.url !== probe.selected.url) return;
     if (message?.type === "frame:ready") {
         if (probe.selected !== probe.page) {
             if (message.frameName !== CAPTURE_FRAME_NAME || message.directChild !== true
@@ -579,10 +620,14 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
                 probe.pendingFrameStatuses.clear();
             }
         }
-        if (!probe.selected.ambiguous && sender.frameId === probe.selected.id) respond({ capture: true });
+        if (sender.frameId === probe.selected.id && sender.documentId) {
+            if (probe.selected.documentId && probe.selected.documentId !== sender.documentId) probe.selected.ambiguous = true;
+            else probe.selected.documentId = sender.documentId;
+        }
+        if (probe.ready && !probe.selected.ambiguous && sender.frameId === probe.selected.id) respond({ capture: true });
         return;
     }
-    if (probe.selected.ambiguous || sender.frameId !== probe.selected.id) return;
+    if (!probe.ready || probe.selected.ambiguous || sender.frameId !== probe.selected.id) return;
     if (message?.type !== "capture" || !message.payload || typeof message.payload.url !== "string") return;
     try {
         const payload = message.payload as Capture;
@@ -597,12 +642,13 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 const collectHeaders = (details: chrome.webRequest.OnBeforeSendHeadersDetails): undefined => {
     const probe = probes.get(details.tabId);
     if (!probe || details.frameId !== probe.selected.id) return;
-    if (probe.headers.size >= 128 && !probe.headers.has(details.url)) return;
+    if (probe.requests.size >= 128 && !probe.requests.has(details.url)) return;
     const headers: Record<string, string> = {};
     for (const header of details.requestHeaders ?? []) {
         if (header.value && /^(?:authorization|origin|referer|user-agent|x-[\w-]+)$/i.test(header.name)) headers[header.name] = header.value;
     }
-    probe.headers.set(details.url, headers);
+    const credentialed = details.requestHeaders?.some(header => header.name.toLowerCase() === "cookie") ?? false;
+    probe.requests.set(details.url, { headers, credentials: credentialed ? "include" : "same-origin" });
     return undefined;
 };
 try {

@@ -35,22 +35,41 @@ let nextTab = 10;
 let nativeMessage!: (command: BrowserCommand) => void;
 let frameMessage!: (
   message: { type: string; frameName: string; directChild: boolean },
-  sender: { tab: { id: number }; frameId: number; url: string },
+  sender: { tab: { id: number }; frameId: number; documentId: string; url: string },
   respond: (reply?: { capture?: boolean }) => void,
 ) => void;
 let completedNavigation!: (details: {
   tabId: number; type: string; parentFrameId: number; frameId: number; url: string; statusCode: number;
 }) => void;
 let nativeReply!: (response: BrowserResponse) => void;
+let requestHeaders!: (details: { tabId: number; frameId: number; url: string; requestHeaders: { name: string; value: string }[] }) => void;
+let inMainWorld = false;
+let documentAbort = new AbortController();
 let releaseResponse: (() => void) | undefined;
 let enteredRequest: (() => void) | undefined;
-const deadline = setTimeout(() => { throw new Error("VK integration exceeded 30 seconds"); }, 30_000);
+const deadline = setTimeout(() => { throw new Error("Browser resolution integration exceeded 60 seconds"); }, 60_000);
+const allohaUrl = "https://alloha.example.org/?season=1&episode=2&translation=42";
+const masterUrl = "https://media.example.org/master.m3u8";
+const playlistUrl = "https://media.example.org/720.m3u8";
 
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
   async fetch(request) {
     const url = new URL(request.url);
+    if (url.pathname.endsWith(".m3u8")) {
+      if (request.headers.get("Origin") !== "https://alloha.example.org" || request.headers.get("Referer") !== allohaUrl) {
+        return new Response("Missing source browser context", { status: 403 });
+      }
+      if (mode === "manifest-wait") {
+        enteredRequest?.();
+        await new Promise<void>(resolve => { releaseResponse = resolve; });
+      }
+      return new Response(mode === "manifest-large" ? " ".repeat(512 * 1024 + 1)
+        : "#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nhttps://media.example.org/720.mp4\n#EXT-X-ENDLIST\n", {
+        headers: { "Content-Type": "application/vnd.apple.mpegurl" },
+      });
+    }
     if (url.pathname === "/al_video.php") {
       check(request.method === "POST", "VK lookup lost POST");
       check(request.headers.get("X-Requested-With") === "XMLHttpRequest", "VK lookup lost request marker");
@@ -78,7 +97,14 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), page.href);
   check(["vkvideo.ru", "media.example.org"].includes(url.hostname), "Unexpected external fixture request");
   if (url.pathname === "/al_video.php") check(init?.credentials === "include", "VK lookup lost browser session");
-  return realFetch(`${server.url.origin}${url.pathname}${url.search}`, init);
+  if (inMainWorld && url.pathname.endsWith(".m3u8")) {
+    check(init?.credentials === "same-origin", "Anonymous cross-origin HLS acquired an unrelated credential mode");
+    init = { ...init, headers: { ...init?.headers, Origin: "https://alloha.example.org", Referer: allohaUrl },
+      signal: AbortSignal.any([init!.signal!, documentAbort.signal]) };
+  }
+  const response = await realFetch(`${server.url.origin}${url.pathname}${url.search}`, init);
+  Object.defineProperty(response, "url", { value: url.href });
+  return response;
 }) as typeof fetch;
 
 Object.defineProperty(globalThis, "location", { value: page });
@@ -86,6 +112,7 @@ Object.defineProperty(globalThis, "navigator", { value: { userAgent: "qcatch-fix
 Object.defineProperty(globalThis, "document", { value: {
   createElement: () => ({ innerHTML: "", get value() { return this.innerHTML; } }),
 } });
+Object.defineProperty(globalThis, "window", { value: { name: CAPTURE_FRAME_NAME } });
 
 const unusedEvent = { addListener() {} };
 const nativePort = {
@@ -98,7 +125,7 @@ const nativePort = {
 
 function announceFrame(tabId: number, url: string, frameId: number, frameName: string, directChild: boolean): boolean {
   let capture = false;
-  frameMessage({ type: "frame:ready", frameName, directChild }, { tab: { id: tabId }, frameId, url }, reply => {
+  frameMessage({ type: "frame:ready", frameName, directChild }, { tab: { id: tabId }, frameId, documentId: `document-${frameId}`, url }, reply => {
     capture = reply?.capture === true;
   });
   return capture;
@@ -123,9 +150,10 @@ Object.defineProperty(globalThis, "chrome", { value: {
       check(options.muted, "Resolve did not mute before navigation");
       tabs.get(tabId)!.url = options.url;
       page.href = options.url;
+      announceFrame(tabId, options.url, 0, "", true);
     },
     async get(tabId: number) { return tabs.get(tabId); },
-    async remove(tabId: number) { tabs.delete(tabId); frames.delete(tabId); },
+    async remove(tabId: number) { tabs.delete(tabId); frames.delete(tabId); documentAbort.abort(); },
     async sendMessage(tabId: number, message: { type: string; url?: string }, target: { frameId: number }) {
       if (message.type === "frame:mount") {
         frames.set(tabId, message.url!);
@@ -142,22 +170,39 @@ Object.defineProperty(globalThis, "chrome", { value: {
         }
         return { mounted: true };
       }
+      if (message.type === "prepare") return { url: frames.get(tabId), embedded: false };
+      if (message.type === "capture:start") {
+        requestHeaders({ tabId, frameId: 7, url: masterUrl, requestHeaders: [
+          { name: "Origin", value: "https://alloha.example.org" }, { name: "Referer", value: allohaUrl },
+        ] });
+        (frameMessage as Function)({ type: "capture", payload: { url: masterUrl, contentType: "application/vnd.apple.mpegurl",
+          body: "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100000,RESOLUTION=640x360\n360.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=500000,RESOLUTION=1280x720\n720.m3u8\n",
+          initiator: allohaUrl } }, { tab: { id: tabId }, frameId: 7, documentId: "document-7", url: allohaUrl }, () => undefined);
+        return { started: true };
+      }
       check(message.type === "ready", "Exact VK resolve fell back to generic player guessing");
       return { ready: true, url: target.frameId === 7 ? frames.get(tabId) : tabs.get(tabId)?.url };
     },
   },
   cookies: { async getAll({ url }: { url: string }) {
+    if (url === playlistUrl) return [];
     check(url === mediaUrl, "Resolve requested unrelated page cookies");
     return [{ name: "cdn", value: "fixture", domain: "media.example.org", path: "/", secure: true, hostOnly: true }];
   } },
-  scripting: { async executeScript(script: { world: string; target: { frameIds: number[] }; func: Function; args: unknown[] }) {
+  scripting: { async executeScript(script: { world: string; target: { frameIds?: number[]; documentIds?: string[] }; func: Function; args: unknown[] }) {
     check(script.world === "MAIN", "VK lookup left MAIN world");
-    check(script.target.frameIds.length === 1, "VK lookup was not scoped to one frame");
+    if (script.target.documentIds) {
+      check(script.target.documentIds.length === 1 && script.target.documentIds[0] === "document-7", "Manifest left its confirmed document");
+      inMainWorld = true;
+      try { return [{ documentId: mode === "manifest-document-changed" ? "document-replaced" : "document-7", result: await script.func(...script.args) }]; }
+      finally { inMainWorld = false; }
+    }
+    check(script.target.frameIds?.length === 1, "VK lookup was not scoped to one frame");
     return mode === "missing-script" ? [] : [{ result: await script.func(...script.args) }];
   } },
   webRequest: {
     onCompleted: { addListener(listener: typeof completedNavigation) { completedNavigation = listener; } },
-    onBeforeSendHeaders: unusedEvent,
+    onBeforeSendHeaders: { addListener(listener: typeof requestHeaders) { requestHeaders = listener; } },
   },
 } });
 
@@ -173,6 +218,7 @@ function resolve(url = sourceUrl, referrer?: string) {
 
 function reset() {
   mode = "normal";
+  documentAbort = new AbortController();
   params = { oid: -234920203, vid: 456239678, md_title: "Generated episode 2",
     url360: "https://media.example.org/360.mp4", url720: mediaUrl,
     subs: [{ title: "Russian", lang: "ru", url: "https://media.example.org/ru.vtt" }] };
@@ -246,6 +292,38 @@ try {
   check(canceled.error?.code === "canceled" && tabs.size === 0, "Cancellation did not close the owned tab");
   releaseResponse?.();
   checks.push("cancel in pending MAIN HTTP request closes owned tab without success");
+  releaseResponse?.();
+  enteredRequest = undefined;
+
+  const resolveHls = () => new Promise<BrowserResponse>(complete => {
+    nativeReply = complete;
+    nativeMessage({ id: ++commandId, method: "resolve", kind: "video", url: allohaUrl,
+      referrer: "https://yani.tv/", selection: { season: "1", episode: "2", translationId: "42", player: "alloha" } });
+  });
+  reset();
+  const hls = await resolveHls();
+  check(!hls.error && (hls.result as { url: string }).url === playlistUrl,
+    `HLS did not retain maximum quality through its source document: ${hls.error?.code ?? "unexpected media"} ${hls.error?.message ?? ""}`);
+  check(tabs.size === 0, "HLS success leaked its helper tab");
+  checks.push("captured HLS master -> exact-document MAIN child fetch with browser Origin/Referer -> maximum quality");
+
+  for (const [failureMode, code] of [["manifest-large", "response_too_large"], ["manifest-document-changed", "selected_content_changed"]] as const) {
+    reset();
+    mode = failureMode;
+    const failure = await resolveHls();
+    check(failure.error?.code === code && !failure.result && tabs.size === 0, `${failureMode} returned media or lost its error/cleanup`);
+    checks.push(failureMode);
+  }
+  reset();
+  mode = "manifest-wait";
+  const manifestEntered = new Promise<void>(complete => { enteredRequest = complete; });
+  const manifestPending = resolveHls();
+  await manifestEntered;
+  nativeMessage({ id: commandId, method: "cancel" });
+  const manifestCanceled = await manifestPending;
+  check(manifestCanceled.error?.code === "canceled" && tabs.size === 0 && !inMainWorld, "Manifest cancellation did not drain its closed document");
+  releaseResponse?.();
+  checks.push("cancel MAIN manifest fetch -> close owned document -> drain injection before canceled reply");
   await writeFile(join(output, "evidence.json"), JSON.stringify({ checks, mediaBytes: (await Bun.file(received).stat()).size }, null, 2));
   console.log(JSON.stringify({ passed: checks.length, evidence: join(output, "evidence.json") }));
 } finally {
