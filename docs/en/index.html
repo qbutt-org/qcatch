@@ -3,59 +3,62 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>qcatch — a browser extension for downloading videos</title>
-  <meta name="description" content="Find video, audio and subtitles on the page you have open. Save them to your computer or watch in qplay.">
-  <meta name="theme-color" content="#151719">
+  <title>qcatch — Download videos from your browser</title>
+  <meta name="description" content="Choose a video, audio tracks and subtitles found on the current page. Save them to your computer or open the video in qplay.">
+  <meta name="theme-color" content="#17181a">
   <link rel="canonical" href="https://qbutt-org.github.io/qcatch/en/">
   <link rel="icon" href="../assets/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="../site.css">
-  <link rel="alternate" hreflang="ru" href="https://qbutt-org.github.io/qcatch/?lang=ru">
+  <link rel="alternate" hreflang="ru" href="https://qbutt-org.github.io/qcatch/">
   <script src="../locale.js"></script>
 </head>
 <body>
   <header>
-    <a class="brand" href="./"><img src="../assets/icon.svg" width="32" height="32" alt=""><span>qcatch</span></a>
+    <a class="brand" href="./?lang=en"><img src="../assets/icon.svg" width="34" height="34" alt=""><span>qcatch</span></a>
     <nav class="products">
-      <a href="https://qbutt-org.github.io/qbutt/en/">qbutt</a>
-      <a href="https://qbutt-org.github.io/qplay/en/">qplay</a>
+      <a href="https://qbutt-org.github.io/qbutt/en/?lang=en">qbutt</a>
+      <a href="https://qbutt-org.github.io/qplay/en/?lang=en">qplay</a>
       <a href="https://github.com/qbutt-org/qcatch">GitHub</a>
     </nav>
     <nav class="languages" aria-label="Language">
       <a href="../?lang=ru" data-locale="ru" lang="ru" hreflang="ru">RU</a>
-      <a href="./" data-locale="en" lang="en" hreflang="en" aria-current="page">EN</a>
+      <a href="./?lang=en" data-locale="en" lang="en" hreflang="en" aria-current="page">EN</a>
     </nav>
   </header>
 
   <main>
     <section class="hero">
-      <h1>qcatch</h1>
-      <p class="lead">A browser extension for downloading videos</p>
-      <p class="intro">qcatch finds video, audio and subtitles on the page you have open and saves selected tracks.</p>
-      <div class="actions">
-        <a class="download" href="https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-setup.exe">Download for Windows</a>
-        <a href="https://github.com/qbutt-org/qcatch/releases/latest">All files</a>
+      <div>
+        <h1>Save videos<br>from your browser</h1>
+        <p class="intro">Choose a video, audio tracks and subtitles found on the current page. Save them to your computer or open the video in qplay.</p>
+        <div class="actions">
+          <a class="download" href="https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-setup.exe">Download for Windows</a>
+          <a href="https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-portable.zip">Portable</a>
+        </div>
+        <p class="note">For Edge and Chrome. The extension currently requires manual installation.</p>
       </div>
+      <figure class="preview">
+      <img src="../assets/capture-en.png" width="480" height="569" alt="qcatch popup with video and track selection">
+    </figure>
     </section>
 
     <section class="details">
-      <h2>Browser installation</h2>
-      <p>The EXE installer prepares qcatch and the extension folder. Open the extensions page in Edge or Chrome, enable Developer mode, click Load unpacked and select the extension folder shown in the setup instructions. The extension is not in the store yet.</p>
-      <p>Open a video page and start playback. qcatch will show the streams, audio tracks and subtitles it finds. Choose what to save.</p>
-    </section>
-
-    <section class="details">
-      <h2>Downloads and playback</h2>
-      <p>Save video with audio and subtitles, or save a separate audio stream.</p>
-      <p>Open in qplay sends the selected video to installed <a href="https://qbutt-org.github.io/qplay/en/">qplay</a>. Separate actions send it to <a href="https://qbutt-org.github.io/qbutt/en/">qbutt</a> for watching or downloading. The regular download button uses qcatch.</p>
-      <a href="https://github.com/qbutt-org/qcatch/blob/main/README.en.md">How to use qcatch</a>
+      <article id="install">
+        <h2>Install the extension</h2>
+        <p>The installer prepares qcatch and its extension folder. In Edge or Chrome, turn on Developer mode on the extensions page, choose Load unpacked and select the folder shown after installation. <a href='https://github.com/qbutt-org/qcatch#readme'>Installation instructions</a>.</p>
+      </article>
+      <article>
+        <h2>Choose what to save</h2>
+        <p>qcatch detects HLS, DASH and direct video streams available to the page. Save audio on its own or keep selected tracks with the video. DRM-protected videos are not supported.</p>
+      </article>
     </section>
   </main>
 
   <footer>
     <span>qcatch</span>
-    <a href="https://github.com/qbutt-org/qcatch/releases">What's new</a>
+    <a href="https://github.com/qbutt-org/qcatch/releases/latest">Release notes</a>
     <a href="https://github.com/qbutt-org/qcatch/issues">Report a problem</a>
-    <a href="https://github.com/qbutt-org/qcatch/blob/main/LICENSE">AGPL-3.0</a>
+    <a href="https://github.com/qbutt-org/qcatch/blob/main/LICENSE">License</a>
   </footer>
 </body>
 </html>
