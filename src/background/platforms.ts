@@ -8,7 +8,7 @@ import {
   type NativeHealth,
   type NativeJob,
 } from "../shared/native.ts";
-import type { DownloadJob } from "../shared/types.ts";
+import type { DownloadInput, DownloadJob } from "../shared/types.ts";
 import { bridgeRequest } from "./native.ts";
 import { enqueueDownloads } from "./engine.ts";
 import { platformAssets, type PlatformAsset } from "./platform-assets.ts";
@@ -179,7 +179,7 @@ async function downloadBrowserAssets(
       pageUrl: reference.url,
       title: asset.filename.replace(/\.[^.]+$/, ""),
       player: PLATFORM_NAMES[reference.service],
-      container: "mp4",
+      container: asset.container,
       filename: audioOnly
         ? asset.filename.replace(/\.[^.]+$/, ".m4a")
         : asset.filename,
@@ -190,6 +190,13 @@ async function downloadBrowserAssets(
           role: audioOnly ? "audio" : "media",
           headers: [{ name: "Referer", value: reference.url }],
         },
+        ...(asset.audioTracks ?? []).map<DownloadInput>(track => ({
+          url: track.url,
+          kind: "audio",
+          role: "audio",
+          ...(track.name ? { name: track.name } : {}),
+          headers: [{ name: "Referer", value: reference.url }],
+        })),
       ],
       subtitles: [],
       ...(asset.duration ? { expectedDuration: asset.duration } : {}),

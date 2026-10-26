@@ -1,17 +1,28 @@
 import { buildFilename } from "../shared/filename.ts";
 import type { PlatformReference } from "../shared/platforms.ts";
+import { readInstagramAssets } from "./instagram.ts";
+import { readFileDashAssets, type FileDashMedia } from "./page-dash.ts";
+import type { Container } from "../shared/types.ts";
 
 export type PlatformAsset = {
   url: string;
   kind: "video" | "audio" | "hls" | "photo" | "gif";
   filename: string;
+  container: Container;
   audioOnly?: boolean;
   duration?: number;
+  audioTracks?: FileDashMedia["audioTracks"];
 };
 
-type PageAssets = {
+export type PageAssets = {
   title: string;
-  assets: Array<Omit<PlatformAsset, "filename">>;
+  assets: Array<Omit<PlatformAsset, "filename" | "container"> | {
+    kind: "file-dash";
+    manifest: string;
+    manifestUrl: string;
+    requireAudio: boolean;
+    duration?: number;
+  }>;
 };
 
 // This function is serialized into the source page. Its requests use that page's session.
@@ -78,64 +89,28 @@ async function readPageAssets(
         new URL(url).hostname !== "i.redd.it" ||
         !/\.gif$/i.test(new URL(url).pathname)
       ) {
-        if (location.href !== pageUrl)
-          throw new Error("The page changed. Open the media again and retry.");
-        return { native: true };
-      }
-      result = {
-        title: post.title || `Reddit ${reference.id}`,
-        assets: [{ url, kind: "gif" }],
-      };
-    } else if (reference.service === "instagram") {
-      const alphabet =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-      let pk = 0n;
-      for (const char of reference.id)
-        pk = pk * 64n + BigInt(alphabet.indexOf(char));
-      const response = await json(`/api/v1/media/${pk}/info/`, {
-        "X-IG-App-ID": "936619743392459",
-        "X-ASBD-ID": "359341",
-        "X-IG-WWW-Claim": "0",
-        Accept: "*/*",
-      });
-      const item = response.items?.[0];
-      const returnedId =
-        typeof item?.id === "string" ? item.id.split("_")[0] : item?.pk;
-      if (!item || String(returnedId) !== String(pk))
-        throw new Error(
-          "The source returned different media. Reload the post and retry.",
-        );
-      const entries: Item[] = item.carousel_media ?? [item];
-      const assets = entries.map((entry) => {
-        const video = best(entry.video_versions);
-        if (
-          !video &&
-          (entry.media_type === 2 ||
-            entry.video_dash_manifest ||
-            entry.video_duration)
-        ) {
-          throw new Error(
-            "The source did not return this media. Open it in the site's player and retry.",
-          );
-        }
-        const url = video ?? best(entry.image_versions2?.candidates);
-        if (!url)
-          throw new Error(
-            "The source did not return this media. Open it in the site's player and retry.",
-          );
-        const duration = entry.video_duration;
-        return {
-          url,
-          kind: video ? ("video" as const) : ("photo" as const),
-          ...(video && Number.isFinite(duration) && duration > 0
-            ? { duration }
-            : {}),
+        const video = post.secure_media?.reddit_video ?? post.media?.reddit_video;
+        if (!video) return { native: true };
+        const playlist = https(video.dash_url);
+        if (!playlist) throw new Error("The source did not return this media. Open it in the site's player and retry.");
+        const stream = await fetch(playlist, { signal: AbortSignal.timeout(20_000) });
+        if (!stream.ok) throw new Error(`The source returned HTTP ${stream.status}. Reload the page and retry.`);
+        result = {
+          title: post.title || `Reddit ${reference.id}`,
+          assets: [{
+            kind: "file-dash",
+            manifest: await stream.text(),
+            manifestUrl: playlist,
+            requireAudio: video.is_gif === false,
+            ...(Number(video.duration) > 0 ? { duration: Number(video.duration) } : {}),
+          }],
         };
-      });
-      result = {
-        title: item.caption?.text?.slice(0, 180) || `Instagram ${reference.id}`,
-        assets,
-      };
+      } else {
+        result = {
+          title: post.title || `Reddit ${reference.id}`,
+          assets: [{ url, kind: "gif" }],
+        };
+      }
     } else if (reference.service === "pinterest") {
       if (!/^\d+$/.test(reference.id))
         throw new Error("Open the full Pinterest pin link and retry.");
@@ -282,7 +257,7 @@ export async function platformAssets(
   if (tab.id === undefined || !tab.url)
     throw new Error("Open the source page and retry.");
   const [script] = await chrome.scripting.executeScript({
-    func: readPageAssets,
+    func: reference.service === "instagram" ? readInstagramAssets : readPageAssets,
     args: [reference, tab.url],
     target: { tabId: tab.id },
     world: "MAIN",
@@ -292,23 +267,42 @@ export async function platformAssets(
     throw new Error("The source page did not respond. Reload it and retry.");
   if ("error" in result) throw new Error(result.error);
   if ("native" in result) return undefined;
+  const assets: Array<Omit<PlatformAsset, "filename" | "container">> = [];
+  for (const asset of result.assets) {
+    if (asset.kind !== "file-dash") {
+      assets.push(asset);
+      continue;
+    }
+    const [resolved] = await chrome.scripting.executeScript({
+      func: readFileDashAssets,
+      args: [asset.manifest, asset.manifestUrl, tab.url, asset.requireAudio],
+      target: { tabId: tab.id },
+      world: "MAIN",
+    });
+    const media = resolved?.result;
+    if (!media) throw new Error("The source page did not respond. Reload it and retry.");
+    if ("error" in media) throw new Error(media.error);
+    assets.push({ ...media, ...(asset.duration ? { duration: asset.duration } : {}) });
+  }
   const seen = new Set<string>();
-  return result.assets
+  return assets
     .filter((asset) => !seen.has(asset.url) && Boolean(seen.add(asset.url)))
-    .map((asset, index) => {
+    .map((media, index) => {
+      const container: Container = (media.audioTracks?.length ?? 0) > 1 ? "mkv" : "mp4";
       const extension =
-        asset.kind === "gif"
+        media.kind === "gif"
           ? "gif"
-          : asset.kind === "photo"
-            ? (new URL(asset.url).pathname.match(/\.(png|webp|jpe?g)$/i)?.[1] ??
+          : media.kind === "photo"
+            ? (new URL(media.url).pathname.match(/\.(png|webp|jpe?g)$/i)?.[1] ??
               "jpg")
-            : asset.kind === "audio"
-              ? (new URL(asset.url).pathname.match(
+            : media.kind === "audio"
+              ? (new URL(media.url).pathname.match(
                   /\.(mp3|m4a|ogg|opus|flac)$/i,
                 )?.[1] ?? "m4a")
-              : "mp4";
+              : container;
       return {
-        ...asset,
+        ...media,
+        container,
         filename: buildFilename(
           `${result.title}${result.assets.length > 1 ? ` (${index + 1})` : ""}`,
           extension,
