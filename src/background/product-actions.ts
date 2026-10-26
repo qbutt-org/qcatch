@@ -16,6 +16,10 @@ interface ActiveAction {
 const active = new Map<number, ActiveAction>();
 const mutations = new Map<number, Promise<unknown>>();
 
+export function productsBusy(): boolean {
+  return active.size > 0 || mutations.size > 0;
+}
+
 async function mutateActions<T>(tabId: number, operation: () => Promise<T>): Promise<T> {
   const previous = mutations.get(tabId) ?? Promise.resolve();
   const current = previous.catch(() => undefined).then(operation);

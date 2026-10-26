@@ -29,6 +29,10 @@ export type PlatformResult = {
 
 const activeRuns = new Map<string, Promise<PlatformResult>>();
 
+export function platformsBusy(): boolean {
+  return activeRuns.size > 0;
+}
+
 async function sourceCookies(reference: PlatformReference) {
   // Keep domain/path/secure scope; only the selected service goes to its local extractor.
   const domains = {

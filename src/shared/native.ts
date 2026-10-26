@@ -7,6 +7,11 @@ export type NativeHealth = {
   desktopPath: string;
   qplayInstalled: boolean;
   qbuttInstalled: boolean;
+  update?: {
+    state: "disabled" | "idle" | "checking" | "current" | "ready" | "error" | "installing";
+    version?: string;
+    error?: string;
+  };
   tools: {
     status: "checking" | "ready" | "error";
     ytDlpVersion?: string;

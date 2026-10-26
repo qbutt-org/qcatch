@@ -226,8 +226,13 @@ impl Control {
         MutexGuard::acquire(&self.mutex, timeout)
     }
 
-    pub fn stop(&self) -> Result<MutexGuard<'_>> {
+    pub fn request_stop(&self) -> Result<()> {
         unsafe { SetEvent(HANDLE(self.stop.as_raw_handle())) }?;
+        Ok(())
+    }
+
+    pub fn stop(&self) -> Result<MutexGuard<'_>> {
+        self.request_stop()?;
         self.lock(15_000)?
             .ok_or_else(|| anyhow::anyhow!("bridge did not stop within 15 seconds"))
     }

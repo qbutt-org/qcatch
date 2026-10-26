@@ -3,7 +3,6 @@
   "name": "qcatch",
   "description": "__MSG_extensionDescription__",
   "default_locale": "en",
-  "version": "1.1.1",
   "minimum_chrome_version": "127",
   "icons": {
     "16": "icons/icon-16.png",

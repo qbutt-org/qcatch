@@ -1,6 +1,8 @@
 export type Language = "ru" | "en";
 
 const english = {
+  "Подключите расширение из обновлённой папки qcatch. Нажмите, чтобы открыть её.":
+    "Connect the extension from the updated qcatch folder. Click to open it.",
   "Открыть эфир в qplay": "Watch live in qplay",
   "Эфир открыт в qplay": "Live stream opened in qplay",
   "Скачать трек": "Download track",

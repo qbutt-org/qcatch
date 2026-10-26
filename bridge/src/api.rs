@@ -10,7 +10,7 @@ use std::{
         mpsc,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail, ensure};
@@ -20,7 +20,8 @@ use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 
 use crate::{
-    Config, EXTENSION_ID, PORT, cookies::BrowserCookie, download, platform, services, tools::Tools,
+    Config, EXTENSION_ID, PORT, app_update, cookies::BrowserCookie, download, platform, services,
+    tools::Tools,
 };
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -69,6 +70,8 @@ pub struct State {
     pub info: HashMap<String, InfoState>,
     pub jobs: Vec<Job>,
     pub cancel: HashMap<String, Arc<AtomicBool>>,
+    pub update: app_update::State,
+    installation: Option<PathBuf>,
 }
 
 pub type Shared = Arc<Mutex<State>>;
@@ -76,6 +79,9 @@ type SharedTools = Arc<RwLock<Tools>>;
 
 enum Task {
     Prepare,
+    CheckUpdate {
+        cancel: Arc<AtomicBool>,
+    },
     Download {
         id: String,
         input: services::Request,
@@ -104,11 +110,19 @@ pub fn serve(
             job.error = Some("Загрузка прервана перезапуском. Добавьте её снова.".into());
         }
     }
+    let installation = app_update::installation(&home);
+    let update = if installation.is_some() {
+        app_update::State::Idle
+    } else {
+        app_update::State::Disabled
+    };
     let state = Arc::new(Mutex::new(State {
         tools: json!({"status":"checking"}),
         info: HashMap::new(),
         jobs,
         cancel: HashMap::new(),
+        update,
+        installation,
     }));
     let (sender, receiver) = mpsc::channel();
     let tools = Arc::new(RwLock::new(Tools::new(&home)?));
@@ -125,7 +139,31 @@ pub fn serve(
             .into_iter()
             .map(|id| format!("chrome-extension://{id}")),
     );
+    let mut next_update = Instant::now();
     while !control.stopping(0)? {
+        {
+            let mut data = state.lock().unwrap();
+            if matches!(data.update, app_update::State::Installing) {
+                control.request_stop()?;
+                break;
+            }
+            if (matches!(data.update, app_update::State::Idle) || Instant::now() >= next_update)
+                && data.cancel.is_empty()
+                && !data.info.values().any(|info| info.status == "loading")
+                && data.tools["status"] != "checking"
+                && matches!(
+                    data.update,
+                    app_update::State::Idle
+                        | app_update::State::Current
+                        | app_update::State::Failed(_)
+                )
+            {
+                let cancel = Arc::new(AtomicBool::new(false));
+                data.update = app_update::State::Checking(cancel.clone());
+                sender.send(Task::CheckUpdate { cancel })?;
+                next_update = Instant::now() + Duration::from_secs(6 * 3600);
+            }
+        }
         let Some(mut request) = server.recv_timeout(Duration::from_millis(150))? else {
             continue;
         };
@@ -181,6 +219,7 @@ pub fn serve(
             ),
         }
     }
+    state.lock().unwrap().update.cancel_check();
     for cancel in state.lock().unwrap().cancel.values() {
         cancel.store(true, Ordering::Relaxed);
     }
@@ -318,13 +357,49 @@ fn route(
     desktop: &Path,
 ) -> Result<(u16, Value)> {
     let path = request.url().to_owned();
+    if request.method() == &Method::Post && path != "/updates/apply" {
+        state.lock().unwrap().update.cancel_check();
+    }
     match (request.method(), path.as_str()) {
-        (&Method::Get, "/health") => Ok((
-            200,
-            json!({"protocol":1,"version":env!("CARGO_PKG_VERSION"),"desktopPath":desktop,"tools":state.lock().unwrap().tools,
-                "qplayInstalled":crate::browser::application("qplay").is_some(),
-                "qbuttInstalled":crate::browser::application("qbutt").is_some()}),
-        )),
+        (&Method::Get, "/health") => {
+            let data = state.lock().unwrap();
+            Ok((
+                200,
+                json!({
+                    "protocol":1,
+                    "version":env!("CARGO_PKG_VERSION"),
+                    "desktopPath":desktop,
+                    "tools":data.tools,
+                    "qplayInstalled":crate::browser::application("qplay").is_some(),
+                    "qbuttInstalled":crate::browser::application("qbutt").is_some(),
+                    "update":data.update.snapshot(),
+                }),
+            ))
+        }
+        (&Method::Post, "/extension/setup") => {
+            let input: Value = body(request)?;
+            crate::browser::connect(input["browser"].as_str().context("Browser is required.")?)?;
+            Ok((200, json!({"opened":true})))
+        }
+        (&Method::Post, "/updates/apply") => {
+            let _: Value = body(request)?;
+            let mut data = state.lock().unwrap();
+            if !data.cancel.is_empty() || data.info.values().any(|info| info.status == "loading") {
+                return Ok((200, json!({"accepted":false})));
+            }
+            let (app_update::State::Ready(update), Some(install)) =
+                (&data.update, &data.installation)
+            else {
+                return Ok((200, json!({"accepted":false})));
+            };
+            if let Err(error) = update.start(install) {
+                let message = format!("{error:#}");
+                data.update = app_update::State::Failed(message.clone());
+                return Err(anyhow::anyhow!(message));
+            }
+            data.update = app_update::State::Installing;
+            Ok((200, json!({"accepted":true})))
+        }
         (&Method::Get, "/jobs") => {
             let mut data = state.lock().unwrap();
             let count = data.jobs.len();
@@ -727,6 +802,16 @@ fn worker(
         match task {
             Task::Prepare => {
                 drop(current_tools(&tools, &state));
+            }
+            Task::CheckUpdate { cancel } => {
+                let result = app_update::prepare(&home, &cancel);
+                let mut data = state.lock().unwrap();
+                data.update = match result {
+                    Err(error) => app_update::State::Failed(error.to_string()),
+                    Ok(_) if cancel.load(Ordering::Acquire) => app_update::State::Idle,
+                    Ok(Some(update)) => app_update::State::Ready(update),
+                    Ok(None) => app_update::State::Current,
+                };
             }
             Task::Download { id, input } => {
                 let cancel = Arc::clone(&state.lock().unwrap().cancel[&id]);

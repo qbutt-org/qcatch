@@ -1,4 +1,5 @@
 import "../connection/background.ts";
+import "./updates.ts";
 import { normalizedHeaders } from "../shared/media.ts";
 import { planYummyJobs } from "../shared/jobs.ts";
 import type { BackgroundMessage, CapturePayload, YummyCatalog } from "../shared/types.ts";

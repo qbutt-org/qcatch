@@ -24,6 +24,10 @@ import {
 
 const activeTabs = new Set<number>();
 const gifTasks = new Map<string, number>();
+
+export function actionsBusy(): boolean {
+  return activeTabs.size > 0 || gifTasks.size > 0;
+}
 const DOWNLOAD_TITLES = {
   rutube: "Скачать текущее видео Rutube",
   twitter: "Скачать медиа текущего поста",

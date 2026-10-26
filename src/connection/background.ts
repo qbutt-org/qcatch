@@ -39,6 +39,10 @@ const probes = new Map<number, Probe>();
 const operations = new Map<number, AbortController>();
 let port: chrome.runtime.Port | undefined;
 let searchingVk = false;
+
+export function connectionBusy(): boolean {
+    return operations.size > 0;
+}
 const delay = (milliseconds: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
     signal?.throwIfAborted();
     const timer = setTimeout(() => { signal?.removeEventListener("abort", abort); resolve(); }, milliseconds);

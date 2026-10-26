@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod api;
+mod app_update;
 mod browser;
 mod cookies;
 mod download;

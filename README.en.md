@@ -46,6 +46,8 @@ Once connected, pin the qcatch icon to the browser toolbar. If the source page w
 
 The release page also offers a portable version.
 
+The installed version updates in the background when current actions finish and the extension popup is closed. The extension reloads automatically when loaded from the installed folder. The portable version is updated manually.
+
 ## Download video
 
 Open a page with video and start playback. Click the qcatch icon to see detected streams and tracks. Choose a source and save the video. Keep the source tab open until the download finishes, since the temporary URL or website session may expire.
@@ -74,11 +76,11 @@ Bun is required; the Windows helper also requires Rust and Visual Studio Build T
 bun install --frozen-lockfile
 bun run check
 bun run bridge:build
-bun run release:build -- v1.1.0
+bun run release:build -- v1.2.0
 ```
 
 See the [architecture](docs/ARCHITECTURE.md) and [project rules](AGENTS.md).
 
 ## License
 
-qcatch is distributed under [AGPL-3.0-or-later](LICENSE). Third-party licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). qcatch source is available from the [v1.1.0 tag](https://github.com/qbutt-org/qcatch/tree/v1.1.0); exact dependency sources are available in a separate [technical archive](https://github.com/qbutt-org/qcatch/releases/download/v1.1.0-sources/qcatch-1.1.0-runtime-sources.zip).
+qcatch is distributed under [AGPL-3.0-or-later](LICENSE). Third-party licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). qcatch source is available from the [v1.2.0 tag](https://github.com/qbutt-org/qcatch/tree/v1.2.0); exact dependency sources are available in a separate [technical archive](https://github.com/qbutt-org/qcatch/releases/download/v1.2.0-sources/qcatch-1.2.0-runtime-sources.zip).

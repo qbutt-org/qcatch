@@ -46,6 +46,8 @@
 
 На странице релиза доступна также portable-версия.
 
+Установленная версия обновляется в фоне, когда завершены текущие действия и закрыто окно расширения. Расширение из установленной папки перезагружается автоматически. Portable-версия обновляется вручную.
+
 ## Скачать видео
 
 Откройте страницу с видео и запустите воспроизведение. Нажмите значок qcatch: в списке появятся обнаруженные потоки и дорожки. Выберите источник и сохраните видео. Исходную вкладку лучше держать открытой до завершения, поскольку временная ссылка или сессия сайта могут истечь.
@@ -74,11 +76,11 @@ qcatch поддерживает прямые файлы, HLS и DASH, отдел
 bun install --frozen-lockfile
 bun run check
 bun run bridge:build
-bun run release:build -- v1.1.0
+bun run release:build -- v1.2.0
 ```
 
 См. [архитектуру](docs/ARCHITECTURE.md) и [правила проекта](AGENTS.md).
 
 ## Лицензия
 
-qcatch распространяется по [AGPL-3.0-or-later](LICENSE). Лицензии сторонних компонентов приведены в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Исходники qcatch доступны в [теге v1.1.0](https://github.com/qbutt-org/qcatch/tree/v1.1.0); точные исходники зависимостей — в отдельном [техническом архиве](https://github.com/qbutt-org/qcatch/releases/download/v1.1.0-sources/qcatch-1.1.0-runtime-sources.zip).
+qcatch распространяется по [AGPL-3.0-or-later](LICENSE). Лицензии сторонних компонентов приведены в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Исходники qcatch доступны в [теге v1.2.0](https://github.com/qbutt-org/qcatch/tree/v1.2.0); точные исходники зависимостей — в отдельном [техническом архиве](https://github.com/qbutt-org/qcatch/releases/download/v1.2.0-sources/qcatch-1.2.0-runtime-sources.zip).

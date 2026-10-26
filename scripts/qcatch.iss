@@ -44,6 +44,8 @@ russian.ConnectBrowser=Подключить расширение qcatch к бр�
 english.ConnectBrowser=Connect qcatch to your browser
 russian.StopFailure=Не удалось остановить qcatch. Завершите текущие загрузки и повторите установку.
 english.StopFailure=Could not stop qcatch. Finish the current downloads and run setup again.
+russian.NewerInstalled=В этой папке уже установлена более новая версия qcatch.
+english.NewerInstalled=A newer qcatch version is already installed in this folder.
 
 [Files]
 Source: "{#BundleDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -70,10 +72,56 @@ Filename: "{app}\setup.html"; Description: "{cm:ConnectBrowser}"; Flags: shellex
 Filename: "{app}\qcatch.exe"; Parameters: "--stop"; Flags: runhidden waituntilterminated; RunOnceId: "qcatch-stop"
 
 [Code]
+function OpenProcess(Access: LongWord; Inherit: LongWord; ProcessID: LongWord): THandle;
+    external 'OpenProcess@kernel32.dll stdcall';
+function QueryFullProcessImageName(Process: THandle; Flags: LongWord; Name: String; var Size: LongWord): Boolean;
+    external 'QueryFullProcessImageNameW@kernel32.dll stdcall';
+function WaitForSingleObject(Handle: THandle; Milliseconds: LongWord): LongWord;
+    external 'WaitForSingleObject@kernel32.dll stdcall';
+function CloseHandle(Handle: THandle): Boolean;
+    external 'CloseHandle@kernel32.dll stdcall';
+
+function WaitForUpdatingProcess: Boolean;
+var Process: THandle; ProcessPath: String; Size: LongWord;
+begin
+  Result := True;
+  if ExpandConstant('{param:QCATCHUPDATE|}') = '' then Exit;
+  Process := OpenProcess($100000 or $1000, 0, StrToIntDef(ExpandConstant('{param:QCATCHUPDATE|}'), 0));
+  if Process = 0 then Exit;
+  Result := False;
+  try
+    Size := 32768;
+    SetLength(ProcessPath, Size);
+    if not QueryFullProcessImageName(Process, 0, ProcessPath, Size) then Exit;
+    SetLength(ProcessPath, Size);
+    if CompareText(ProcessPath, ExpandConstant('{app}\qcatch.exe')) <> 0 then Exit;
+    Result := WaitForSingleObject(Process, 120000) = 0;
+  finally
+    CloseHandle(Process);
+  end;
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var ExitCode: Integer;
+    RegisteredPath, RegisteredVersion: String;
+    InstalledVersion, CandidateVersion: Int64;
 begin
   Result := '';
+  if RegQueryStringValue(HKCU64, 'Software\qbutt-org\qcatch', 'InstallDir', RegisteredPath)
+    and (CompareText(RegisteredPath, ExpandConstant('{app}')) = 0)
+    and RegQueryStringValue(HKCU64, 'Software\qbutt-org\qcatch', 'Version', RegisteredVersion)
+    and StrToVersion(RegisteredVersion, InstalledVersion)
+    and StrToVersion('{#AppVersion}', CandidateVersion)
+    and (ComparePackedVersion(InstalledVersion, CandidateVersion) > 0) then
+  begin
+    Result := ExpandConstant('{cm:NewerInstalled}');
+    Exit;
+  end;
+  if not WaitForUpdatingProcess then
+  begin
+    Result := ExpandConstant('{cm:StopFailure}');
+    Exit;
+  end;
   if FileExists(ExpandConstant('{app}\qcatch.exe')) then
     if not Exec(ExpandConstant('{app}\qcatch.exe'), '--stop', '', SW_HIDE, ewWaitUntilTerminated, ExitCode) or (ExitCode <> 0) then
       Result := ExpandConstant('{cm:StopFailure}');
