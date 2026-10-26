@@ -106,7 +106,7 @@ export function platformReference(
       /^\/(?:[^/]+\/)?(?:p|tv|reel|reels)\/([A-Za-z0-9_-]+)\/?$/,
     )?.[1];
   } else if (
-    /^pinterest\.(?:com|co\.uk|de|fr|es|it|ca|com\.au|jp|ru)$/.test(host)
+    /^(?:[a-z]{2}\.)?pinterest\.(?:com|co\.uk|de|fr|es|it|ca|com\.au|jp|ru)$/.test(host)
   ) {
     service = "pinterest";
     id = path.match(/^\/pin\/(?:[^/]+--)?(\d+)\/?$/)?.[1];
