@@ -16,6 +16,7 @@ function jobLabel(job: NativeJob, t: Translator): string | undefined {
     preparing: "Подготовка…",
     downloading: "Скачивание",
     processing: "Обработка файла…",
+    canceling: "Отмена…",
     failed: "Не удалось скачать",
     canceled: "Отменено",
   } as const;
@@ -81,7 +82,7 @@ export function NativeQueue(props: {
                   {showProgress && <b>{progress}%</b>}
                 </div>
               )}
-              {active && (
+              {active && job.status !== "canceling" && (
                 <button
                   class="cancel-button"
                   type="button"

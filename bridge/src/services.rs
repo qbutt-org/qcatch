@@ -471,98 +471,94 @@ pub fn download(
     );
     let temporary = home.join("temp").join(id);
     fs::create_dir_all(&temporary)?;
-    let result = (|| {
-        let mut outputs = Vec::new();
-        for (index, value) in entries.iter().enumerate() {
-            ensure!(!cancel.load(Ordering::Relaxed), "Download canceled.");
-            let formats = selected_formats(value)?;
-            let info = temporary.join(format!("{index}.info.json"));
-            fs::write(&info, serde_json::to_vec(value)?)?;
-            let mut command = yt_dlp(tools, jar.as_ref());
-            command
-                .args([
-                    "--newline",
-                    "--progress-template",
-                    "download:QC_PROGRESS:%(progress._percent_str)s",
-                    "--print",
-                    "after_move:QC_FILE:%(filepath)j",
-                    "--merge-output-format",
-                    "mkv",
-                    "--load-info-json",
-                ])
-                .arg(&info)
-                .arg("--output")
-                .arg(temporary.join(format!("{index}.%(ext)s")));
-            if value["subtitles"]
-                .as_object()
-                .is_some_and(|subtitles| !subtitles.is_empty())
-            {
-                command.args([
-                    "--write-subs",
-                    "--sub-langs",
-                    "all",
-                    "--embed-subs",
-                    "--remux-video",
-                    "mkv",
-                ]);
-            }
-            let identifiers: Vec<_> = formats
-                .iter()
-                .filter_map(|format| format["format_id"].as_str())
-                .collect();
-            if !identifiers.is_empty() {
-                command.args(["--format", &identifiers.join("+")]);
-            }
-            let mut output = None;
-            process(
-                &mut command,
-                cancel,
-                Duration::from_secs(24 * 3600),
-                |line| {
-                    if let Some(percent) = line
-                        .strip_prefix("QC_PROGRESS:")
-                        .and_then(|value| value.trim().trim_end_matches('%').parse::<f64>().ok())
-                    {
-                        update(
-                            state,
-                            id,
-                            "downloading",
-                            (index as f64 + percent.clamp(0.0, 100.0) / 100.0)
-                                / entries.len() as f64
-                                * 0.95,
-                        );
-                    }
-                    if let Some(path) = line.strip_prefix("QC_FILE:") {
-                        output = serde_json::from_str::<String>(path).ok().map(PathBuf::from);
-                    }
-                },
-            )?;
-            let output = output.context("The downloader returned no completed file.")?;
-            ensure!(
-                fs::canonicalize(&output)?.starts_with(fs::canonicalize(&temporary)?),
-                "Unexpected download path."
-            );
-            verify(tools, &output, value, &formats, cancel)?;
-            let extension = output
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .context("Output format missing.")?;
-            ensure!(
-                extension.len() <= 8 && extension.bytes().all(|byte| byte.is_ascii_alphanumeric()),
-                "Invalid output format."
-            );
-            let title = value["title"].as_str().unwrap_or(reference.service);
-            let name = filename(title, reference.service, index, entries.len(), extension);
-            outputs.push((output, name));
-            if index == 0 {
-                let mut data = state.lock().unwrap();
-                if let Some(job) = data.jobs.iter_mut().find(|job| job.id == id) {
-                    job.title = title.into();
+
+    let mut outputs = Vec::new();
+    for (index, value) in entries.iter().enumerate() {
+        ensure!(!cancel.load(Ordering::Relaxed), "Download canceled.");
+        let formats = selected_formats(value)?;
+        let info = temporary.join(format!("{index}.info.json"));
+        fs::write(&info, serde_json::to_vec(value)?)?;
+        let mut command = yt_dlp(tools, jar.as_ref());
+        command
+            .args([
+                "--newline",
+                "--progress-template",
+                "download:QC_PROGRESS:%(progress._percent_str)s",
+                "--print",
+                "after_move:QC_FILE:%(filepath)j",
+                "--merge-output-format",
+                "mkv",
+                "--load-info-json",
+            ])
+            .arg(&info)
+            .arg("--output")
+            .arg(temporary.join(format!("{index}.%(ext)s")));
+        if value["subtitles"]
+            .as_object()
+            .is_some_and(|subtitles| !subtitles.is_empty())
+        {
+            command.args([
+                "--write-subs",
+                "--sub-langs",
+                "all",
+                "--embed-subs",
+                "--remux-video",
+                "mkv",
+            ]);
+        }
+        let identifiers: Vec<_> = formats
+            .iter()
+            .filter_map(|format| format["format_id"].as_str())
+            .collect();
+        if !identifiers.is_empty() {
+            command.args(["--format", &identifiers.join("+")]);
+        }
+        let mut output = None;
+        process(
+            &mut command,
+            cancel,
+            Duration::from_secs(24 * 3600),
+            |line| {
+                if let Some(percent) = line
+                    .strip_prefix("QC_PROGRESS:")
+                    .and_then(|value| value.trim().trim_end_matches('%').parse::<f64>().ok())
+                {
+                    update(
+                        state,
+                        id,
+                        "downloading",
+                        (index as f64 + percent.clamp(0.0, 100.0) / 100.0) / entries.len() as f64
+                            * 0.95,
+                    );
                 }
+                if let Some(path) = line.strip_prefix("QC_FILE:") {
+                    output = serde_json::from_str::<String>(path).ok().map(PathBuf::from);
+                }
+            },
+        )?;
+        let output = output.context("The downloader returned no completed file.")?;
+        ensure!(
+            fs::canonicalize(&output)?.starts_with(fs::canonicalize(&temporary)?),
+            "Unexpected download path."
+        );
+        verify(tools, &output, value, &formats, cancel)?;
+        let extension = output
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .context("Output format missing.")?;
+        ensure!(
+            extension.len() <= 8 && extension.bytes().all(|byte| byte.is_ascii_alphanumeric()),
+            "Invalid output format."
+        );
+        let title = value["title"].as_str().unwrap_or(reference.service);
+        let name = filename(title, reference.service, index, entries.len(), extension);
+        outputs.push((output, name));
+        if index == 0 {
+            let mut data = state.lock().unwrap();
+            if let Some(job) = data.jobs.iter_mut().find(|job| job.id == id) {
+                job.title = title.into();
             }
         }
-        publish_files(outputs, state, desktop, id, cancel)
-    })();
-    let _ = fs::remove_dir_all(&temporary);
-    result
+    }
+    publish_files(outputs, state, desktop, id, cancel)
 }

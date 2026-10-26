@@ -17,7 +17,7 @@ use serde_json::Value;
 use windows::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
 
 use crate::{
-    api::{Shared, VideoInfo},
+    api::{Job, Shared, VideoInfo},
     cookies::{BrowserCookie, CookieJar},
     platform,
     tools::Tools,
@@ -211,186 +211,128 @@ pub fn download(
     let formats = select_formats(&metadata, job.format == "mp3")?;
     let temporary = home.join("temp").join(id);
     fs::create_dir_all(&temporary)?;
-    let result = (|| -> Result<String> {
-        let output = temporary.join(format!("finished.{}", job.format));
-        let trimmed = job.start > 0.0 || end < duration;
-        if trimmed {
-            update(state, id, "downloading", 0.0);
-            let mut ffmpeg = command(&tools.directory.join("ffmpeg.exe"));
-            ffmpeg.args(["-hide_banner", "-loglevel", "error", "-nostdin", "-n"]);
-            for format in &formats {
-                let input = format["url"].as_str().context("Missing media URL")?;
-                let parsed = url::Url::parse(input)?;
-                ensure!(
-                    parsed.scheme() == "https"
-                        && parsed
-                            .host_str()
-                            .is_some_and(|host| host.ends_with(".googlevideo.com")
-                                || host.ends_with(".youtube.com")),
-                    "Unexpected YouTube media host"
+
+    let output = temporary.join(format!("finished.{}", job.format));
+    let trimmed = job.start > 0.0 || end < duration;
+    update(state, id, "downloading", 0.0);
+    let selection = formats
+        .iter()
+        .map(|format| format["format_id"].as_str().unwrap())
+        .collect::<Vec<_>>()
+        .join("+");
+    let info = temporary.join("source.info.json");
+    fs::write(&info, serde_json::to_vec(&metadata)?)?;
+    let mut command = yt_dlp(tools, jar.as_ref());
+    command
+        .args([
+            "--format",
+            &selection,
+            "--audio-multistreams",
+            "--merge-output-format",
+            "mkv",
+            "--newline",
+            "--progress",
+            "--progress-delta",
+            "0.25",
+            "--progress-template",
+            "download:SC_PROGRESS:%(progress._percent_str)s",
+            "--print",
+            "after_move:SC_FILE:%(filepath)j",
+            "--no-simulate",
+            "--no-overwrites",
+            "--output",
+        ])
+        .arg(temporary.join("source.%(ext)s"))
+        .arg("--load-info-json")
+        .arg(&info);
+    let mut source = None;
+    process(
+        &mut command,
+        cancel,
+        Duration::from_secs(24 * 3600),
+        |line| {
+            if let Some(percent) = line
+                .strip_prefix("SC_PROGRESS:")
+                .and_then(|value| value.trim().trim_end_matches('%').parse::<f64>().ok())
+            {
+                update(
+                    state,
+                    id,
+                    "downloading",
+                    (percent / 100.0).clamp(0.0, 1.0) * 0.85,
                 );
-                ffmpeg.args([
-                    "-rw_timeout",
-                    "30000000",
-                    "-ss",
-                    &job.start.to_string(),
-                    "-t",
-                    &(end - job.start).to_string(),
-                ]);
-                if let Some(headers) = format["http_headers"].as_object() {
-                    if let Some(agent) = headers.get("User-Agent").and_then(Value::as_str) {
-                        ffmpeg.arg("-user_agent").arg(agent);
-                    }
-                    if let Some(referer) = headers.get("Referer").and_then(Value::as_str) {
-                        ffmpeg.arg("-referer").arg(referer);
-                    }
-                }
-                ffmpeg.arg("-i").arg(input);
             }
-            if job.format == "mp4" {
-                ffmpeg.args([
-                    "-map",
-                    "0:v:0",
-                    "-map",
-                    if formats.len() > 1 { "1:a:0" } else { "0:a:0" },
-                    "-c:v",
-                    "libx264",
-                    "-preset",
-                    "medium",
-                    "-crf",
-                    "18",
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    "320k",
-                    "-movflags",
-                    "+faststart",
-                ]);
-            } else {
-                ffmpeg.args(["-map", "0:a:0", "-vn", "-c:a", "libmp3lame", "-q:a", "0"]);
+            if let Some(value) = line.strip_prefix("SC_FILE:") {
+                source = serde_json::from_str::<String>(value)
+                    .ok()
+                    .map(PathBuf::from);
             }
-            ffmpeg
-                .args([
-                    "-t",
-                    &(end - job.start).to_string(),
-                    "-progress",
-                    "pipe:1",
-                    "-nostats",
-                ])
-                .arg(&output);
-            process(
-                &mut ffmpeg,
-                cancel,
-                Duration::from_secs(24 * 3600),
-                |line| ffmpeg_progress(state, id, line, end - job.start, 0.0, 0.97),
-            )?;
-        } else {
-            update(state, id, "downloading", 0.0);
-            let selection = formats
-                .iter()
-                .map(|format| format["format_id"].as_str().unwrap())
-                .collect::<Vec<_>>()
-                .join("+");
-            let mut command = yt_dlp(tools, jar.as_ref());
-            command
-                .args([
-                    "--format",
-                    &selection,
-                    "--audio-multistreams",
-                    "--merge-output-format",
-                    "mkv",
-                    "--newline",
-                    "--progress",
-                    "--progress-delta",
-                    "0.25",
-                    "--progress-template",
-                    "download:SC_PROGRESS:%(progress._percent_str)s",
-                    "--print",
-                    "after_move:SC_FILE:%(filepath)j",
-                    "--no-simulate",
-                    "--no-overwrites",
-                    "--output",
-                ])
-                .arg(temporary.join("source.%(ext)s"))
-                .args(["--", &job.url]);
-            let mut source = None;
-            process(
-                &mut command,
-                cancel,
-                Duration::from_secs(24 * 3600),
-                |line| {
-                    if let Some(percent) = line
-                        .strip_prefix("SC_PROGRESS:")
-                        .and_then(|value| value.trim().trim_end_matches('%').parse::<f64>().ok())
-                    {
-                        update(
-                            state,
-                            id,
-                            "downloading",
-                            (percent / 100.0).clamp(0.0, 1.0) * 0.85,
-                        );
-                    }
-                    if let Some(value) = line.strip_prefix("SC_FILE:") {
-                        source = serde_json::from_str::<String>(value)
-                            .ok()
-                            .map(PathBuf::from);
-                    }
-                },
-            )?;
-            let source = source.context("yt-dlp не сообщил имя загруженного файла")?;
-            ensure!(
-                fs::canonicalize(&source)?.starts_with(fs::canonicalize(&temporary)?),
-                "Unexpected download path"
-            );
-            update(state, id, "processing", 0.85);
-            let mut ffmpeg = command_for_conversion(tools, &source, &output, &job.format, &formats);
-            process(
-                &mut ffmpeg,
-                cancel,
-                Duration::from_secs(24 * 3600),
-                |line| ffmpeg_progress(state, id, line, duration, 0.85, 0.12),
-            )?;
-        }
-        ensure!(!cancel.load(Ordering::Relaxed), "Canceled");
-        update(state, id, "processing", 0.98);
-        verify_output(
-            tools,
-            &output,
-            &job.format,
-            end - job.start,
-            formats[0],
-            trimmed,
-            cancel,
-        )?;
-        let title = metadata["title"].as_str().unwrap_or("YouTube");
-        let name = safe_filename(title);
-        let suffix = if trimmed {
-            format!(" [{}-{}]", job.start, end)
-        } else {
-            String::new()
-        };
-        let filename = format!("{name}{suffix}.{}", job.format);
-        publish_files(vec![(output, filename)], state, desktop, id, cancel)?
-            .into_iter()
-            .next()
-            .context("Output filename missing")
-    })();
-    let _ = fs::remove_dir_all(&temporary);
-    result
+        },
+    )?;
+    let source = source.context("yt-dlp не сообщил имя загруженного файла")?;
+    ensure!(
+        fs::canonicalize(&source)?.starts_with(fs::canonicalize(&temporary)?),
+        "Unexpected download path"
+    );
+    update(state, id, "processing", 0.85);
+    let mut ffmpeg = command_for_conversion(tools, &source, &output, &job, &formats, trimmed);
+    process(
+        &mut ffmpeg,
+        cancel,
+        Duration::from_secs(24 * 3600),
+        |line| ffmpeg_progress(state, id, line, end - job.start, 0.85, 0.12),
+    )?;
+    ensure!(!cancel.load(Ordering::Relaxed), "Canceled");
+    update(state, id, "processing", 0.98);
+    verify_output(
+        tools,
+        &output,
+        &job.format,
+        end - job.start,
+        formats[0],
+        trimmed,
+        cancel,
+    )?;
+    let title = metadata["title"].as_str().unwrap_or("YouTube");
+    let name = safe_filename(title);
+    let suffix = if trimmed {
+        format!(" [{}-{}]", job.start, end)
+    } else {
+        String::new()
+    };
+    let filename = format!("{name}{suffix}.{}", job.format);
+    publish_files(vec![(output, filename)], state, desktop, id, cancel)?
+        .into_iter()
+        .next()
+        .context("Output filename missing")
 }
 
 fn command_for_conversion(
     tools: &Tools,
     source: &Path,
     output: &Path,
-    format: &str,
+    job: &Job,
     formats: &[&Value],
+    trimmed: bool,
 ) -> Command {
     let mut command = command(&tools.directory.join("ffmpeg.exe"));
-    command
-        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-n", "-i"])
-        .arg(source);
-    if format == "mp3" {
+    command.args([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-n",
+        "-protocol_whitelist",
+        "file,pipe",
+    ]);
+    if trimmed {
+        command.args(["-ss", &job.start.to_string()]);
+    }
+    command.arg("-i").arg(source);
+    if trimmed && let Some(end) = job.end {
+        command.args(["-t", &(end - job.start).to_string()]);
+    }
+    if job.format == "mp3" {
         command.args(["-map", "0:a:0", "-vn", "-c:a", "libmp3lame", "-q:a", "0"]);
     } else {
         let video = formats[0];
@@ -405,9 +347,10 @@ fn command_for_conversion(
         };
         command.args(["-map", "0:v:0", "-map", audio_index, "-c:v"]);
         let codec = video["vcodec"].as_str().unwrap_or("");
-        if ["avc", "h264", "av01", "av1", "vp9", "vp09", "hev", "hvc"]
-            .iter()
-            .any(|prefix| codec.starts_with(prefix))
+        if !trimmed
+            && ["avc", "h264", "av01", "av1", "vp9", "vp09", "hev", "hvc"]
+                .iter()
+                .any(|prefix| codec.starts_with(prefix))
         {
             command.arg("copy");
         } else {
@@ -417,7 +360,7 @@ fn command_for_conversion(
             .last()
             .and_then(|format| format["acodec"].as_str())
             .unwrap_or("");
-        if audio_codec.starts_with("mp4a") || audio_codec == "aac" {
+        if !trimmed && (audio_codec.starts_with("mp4a") || audio_codec == "aac") {
             command.args(["-c:a", "copy"]);
         } else {
             command.args(["-c:a", "aac", "-b:a", "320k"]);
@@ -521,7 +464,7 @@ pub(crate) fn update(state: &Shared, id: &str, status: &str, progress: f64) {
         .jobs
         .iter_mut()
         .find(|job| job.id == id)
-        && job.status != "canceled"
+        && !matches!(job.status.as_str(), "canceling" | "canceled")
     {
         job.status = status.into();
         job.progress = progress;
@@ -705,10 +648,7 @@ pub(crate) fn publish_files(
             .iter_mut()
             .find(|job| job.id == id)
             .context("Job missing")?;
-        ensure!(
-            !cancel.load(Ordering::Relaxed) && job.status != "canceled",
-            "Download canceled."
-        );
+        ensure!(!cancel.load(Ordering::Relaxed), "Download canceled.");
         let mut filenames = Vec::new();
         for (index, (_, name)) in outputs.iter().enumerate() {
             let file = Path::new(name);
@@ -744,10 +684,8 @@ pub(crate) fn publish_files(
             job.filenames = filenames.clone();
             job.filename = filenames.first().cloned();
         }
-        job.status = "completed".into();
-        job.progress = 1.0;
         Ok(filenames)
     })();
-    let _ = fs::remove_dir_all(staging);
+    fs::remove_dir_all(staging).context("Could not remove temporary download files.")?;
     result
 }

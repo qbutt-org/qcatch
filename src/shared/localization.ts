@@ -221,6 +221,7 @@ const english = {
     "The selected audio track is no longer available for this source.",
   "Не удалось удалить временные файлы загрузки.": "Could not remove temporary download files.",
   "Загрузка отменена": "Download canceled.",
+  "Отмена…": "Canceling…",
   "В выбранном источнике нет совместимых видео- или аудиодорожек":
     "This source has no compatible video or audio tracks.",
   "Не удалось подключиться к странице YummyAnime. Обновите вкладку и повторите попытку.":

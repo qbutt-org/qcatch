@@ -627,7 +627,7 @@ fn route(
                         if let Some(cancel) = data.cancel.get(parts[1]) {
                             cancel.store(true, Ordering::Relaxed);
                         }
-                        data.jobs[index].status = "canceled".into();
+                        data.jobs[index].status = "canceling".into();
                     }
                     Ok((200, serde_json::to_value(&data.jobs[index])?))
                 }
@@ -732,6 +732,9 @@ fn worker(
                 let cancel = Arc::clone(&state.lock().unwrap().cancel[&id]);
                 if cancel.load(Ordering::Relaxed) {
                     let mut data = state.lock().unwrap();
+                    if let Some(job) = data.jobs.iter_mut().find(|job| job.id == id) {
+                        job.status = "canceled".into();
+                    }
                     data.cancel.remove(&id);
                     if let Err(error) = persist(&data, &home) {
                         platform::log_error(&home, &format!("Save download queue: {error:#}"));
@@ -761,6 +764,13 @@ fn worker(
                         .map(|filename| vec![filename])
                     }
                 });
+                let cleanup_error = fs::remove_dir_all(home.join("temp").join(&id))
+                    .err()
+                    .filter(|error| error.kind() != std::io::ErrorKind::NotFound);
+                let cleaned = cleanup_error.is_none();
+                let result = cleanup_error.map_or(result, |error| {
+                    Err(error).context("Could not remove temporary download files.")
+                });
                 let mut data = state.lock().unwrap();
                 if let Some(job) = data.jobs.iter_mut().find(|job| job.id == id) {
                     match result {
@@ -770,7 +780,9 @@ fn worker(
                             job.filename = filenames.first().cloned();
                             job.filenames = filenames;
                         }
-                        Err(_) if cancel.load(Ordering::Relaxed) => job.status = "canceled".into(),
+                        Err(_) if cleaned && cancel.load(Ordering::Relaxed) => {
+                            job.status = "canceled".into();
+                        }
                         Err(error) => {
                             job.status = "failed".into();
                             job.error = Some(error.to_string());

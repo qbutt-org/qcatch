@@ -28,6 +28,7 @@ export type NativeJob = {
     | "preparing"
     | "downloading"
     | "processing"
+    | "canceling"
     | "completed"
     | "failed"
     | "canceled";
