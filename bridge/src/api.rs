@@ -423,7 +423,7 @@ fn route(
                 input.start.is_finite() && input.start >= 0.0,
                 "Неверная позиция воспроизведения"
             );
-            crate::playback::launch(home, url, input.start, input.cookies)?;
+            crate::playback::launch(home, url, Some(input.start), input.cookies)?;
             Ok((200, json!({"opened":true,"start":input.start})))
         }
         (&Method::Post, "/services/play") => {

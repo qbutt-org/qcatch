@@ -142,7 +142,7 @@ pub fn watch(home: &Path, input: &str, cookies: Vec<BrowserCookie>) -> Result<()
         "Open a Twitch live channel to watch it in qplay."
     );
     CookieJar::validate_scope(&cookies, reference.domains)?;
-    crate::playback::launch(home, reference.url, 0.0, cookies)
+    crate::playback::launch(home, reference.url, None, cookies)
 }
 
 fn metadata(

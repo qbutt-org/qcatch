@@ -37,10 +37,15 @@ pub struct Request {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Extractor {
-    pub start: f64,
+    start: Option<f64>,
 }
 
-pub fn launch(home: &Path, url: String, start: f64, cookies: Vec<BrowserCookie>) -> Result<()> {
+pub fn launch(
+    home: &Path,
+    url: String,
+    start: Option<f64>,
+    cookies: Vec<BrowserCookie>,
+) -> Result<()> {
     open(Request {
         home: home.into(),
         url,
@@ -185,18 +190,19 @@ pub fn worker() -> Result<()> {
             .stderr(Stdio::null());
         command.arg("--player-operation-mode=pseudo-gui");
         if let Some(extractor) = request.extractor {
-            ensure!(
-                extractor.start.is_finite() && extractor.start >= 0.0,
-                "Invalid playback position."
-            );
-            command
-                .args([
-                    "--resume-playback=no",
-                    "--ytdl=yes",
-                    "--ytdl-raw-options-append=ignore-config=",
-                    "--ytdl-raw-options-append=no-plugin-dirs=",
-                ])
-                .arg(format!("--start=+{:.3}", extractor.start));
+            command.args([
+                "--resume-playback=no",
+                "--ytdl=yes",
+                "--ytdl-raw-options-append=ignore-config=",
+                "--ytdl-raw-options-append=no-plugin-dirs=",
+            ]);
+            if let Some(start) = extractor.start {
+                ensure!(
+                    start.is_finite() && start >= 0.0,
+                    "Invalid playback position."
+                );
+                command.arg(format!("--start=+{start:.3}"));
+            }
             if let Some(jar) = &jar {
                 command.arg(format!(
                     "--ytdl-raw-options-append=cookies={}",
