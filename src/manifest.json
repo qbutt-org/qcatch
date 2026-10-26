@@ -68,6 +68,7 @@
     "storage",
     "tabs",
     "webRequest",
+    "webNavigation",
     "nativeMessaging",
     "alarms"
   ],

@@ -15,6 +15,7 @@ import {
   resetTabState,
   updatePage,
   updateTwitterCapture,
+  updateTikTokPhotos,
 } from "./state.ts";
 import { estimateYummyBatch, invalidateYummyEstimates, prepareYummyJob, withYummyTabLock } from "./yummy.ts";
 import { showRutubeDownloadProgress } from "./action.ts";
@@ -68,9 +69,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   ]);
 });
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status === "loading") {
-    void Promise.all([resetTabState(tabId), removeProductActions(tabId)]);
+chrome.webNavigation.onCommitted.addListener((details) => {
+  if (details.frameId === 0) {
+    void Promise.all([resetTabState(details.tabId), removeProductActions(details.tabId)]);
   }
 });
 
@@ -111,6 +112,9 @@ chrome.runtime.onMessage.addListener((rawMessage: unknown, sender, sendResponse)
       case "bridge:twitter":
         if (tabId === undefined) return undefined;
         return updateTwitterCapture(tabId, message.capture);
+      case "bridge:tiktok-photos":
+        if (tabId === undefined || sender.frameId !== 0) return undefined;
+        return updateTikTokPhotos(tabId, message.capture);
       case "state:get":
         return readTabState(message.tabId);
       case "preferences:get":

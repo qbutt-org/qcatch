@@ -1,4 +1,5 @@
 import type { TwitterCapture } from "./twitter-media.ts";
+import type { TikTokPhotos } from "./tiktok-photos.ts";
 import type { YoutubeMessage } from "./youtube.ts";
 
 export type MediaKind =
@@ -107,6 +108,7 @@ export type TabState = {
   revision: number;
   tabId: number;
   twitter?: TwitterCapture;
+  tiktokPhotos?: TikTokPhotos;
 };
 
 export type Container = "mkv" | "mp4";
@@ -227,6 +229,7 @@ export type BackgroundMessage =
   | BridgeCaptureMessage
   | BridgePageMessage
   | BridgeTwitterMessage
+  | { capture: TikTokPhotos; type: "bridge:tiktok-photos" }
   | { tabId: number; type: "state:get" }
   | { pageUrl: string; tabId: number; type: "preferences:get" }
   | { preferences: PopupPreferences; tabId: number; type: "preferences:set" }

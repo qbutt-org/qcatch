@@ -3,6 +3,8 @@ import type { PlatformReference } from "../shared/platforms.ts";
 import { readInstagramAssets } from "./instagram.ts";
 import { readFileDashAssets, type FileDashMedia } from "./page-dash.ts";
 import type { Container } from "../shared/types.ts";
+import { readTabState } from "./state.ts";
+import { validateTikTokPhotos } from "../shared/tiktok-photos.ts";
 
 export type PlatformAsset = {
   url: string;
@@ -171,26 +173,6 @@ async function readPageAssets(
         title: pin.title || pin.grid_title || `Pinterest ${reference.id}`,
         assets,
       };
-    } else if (reference.service === "tiktok") {
-      const node = document.getElementById(
-        "__UNIVERSAL_DATA_FOR_REHYDRATION__",
-      );
-      const state = node?.textContent
-        ? JSON.parse(node.textContent)
-        : undefined;
-      const item =
-        state?.__DEFAULT_SCOPE__?.["webapp.video-detail"]?.itemInfo?.itemStruct;
-      if (!item || String(item.id) !== reference.id)
-        throw new Error("Reload this TikTok photo post and retry.");
-      const assets = (item.imagePost?.images ?? []).map((image: Item) => {
-        const url = (image.imageURL?.urlList ?? []).map(https).find(Boolean);
-        if (!url)
-          throw new Error(
-            "The source did not return this image. Reload the post and retry.",
-          );
-        return { url, kind: "photo" as const };
-      });
-      result = { title: item.desc || `TikTok ${reference.id}`, assets };
     } else if (reference.service === "vkmusic") {
       const rows = [...document.querySelectorAll<HTMLElement>("[data-audio]")];
       const tracks: Item[] = [];
@@ -256,13 +238,20 @@ export async function platformAssets(
 ): Promise<PlatformAsset[] | undefined> {
   if (tab.id === undefined || !tab.url)
     throw new Error("Open the source page and retry.");
-  const [script] = await chrome.scripting.executeScript({
-    func: reference.service === "instagram" ? readInstagramAssets : readPageAssets,
-    args: [reference, tab.url],
-    target: { tabId: tab.id },
-    world: "MAIN",
-  });
-  const result = script?.result;
+  let result: PageAssets | { native: true } | { error: string } | undefined;
+  if (reference.service === "tiktok") {
+    const capture = validateTikTokPhotos((await readTabState(tab.id)).tiktokPhotos, tab.url);
+    if (!capture) throw new Error("Reload this TikTok photo post and retry.");
+    result = { title: capture.title, assets: capture.urls.map(url => ({ url, kind: "photo" })) };
+  } else {
+    const [script] = await chrome.scripting.executeScript({
+      func: reference.service === "instagram" ? readInstagramAssets : readPageAssets,
+      args: [reference, tab.url],
+      target: { tabId: tab.id },
+      world: "MAIN",
+    });
+    result = script?.result;
+  }
   if (!result)
     throw new Error("The source page did not respond. Reload it and retry.");
   if ("error" in result) throw new Error(result.error);

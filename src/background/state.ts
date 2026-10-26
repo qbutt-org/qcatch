@@ -10,6 +10,7 @@ import {
 import { emptyTabState } from "../shared/types.ts";
 import { oneClickService } from "../shared/one-click.ts";
 import type { TwitterCapture } from "../shared/twitter-media.ts";
+import { validateTikTokPhotos } from "../shared/tiktok-photos.ts";
 import type { CapturePayload, CapturedResource, PageContext, TabState } from "../shared/types.ts";
 
 const MAX_RESOURCES = 250;
@@ -109,6 +110,18 @@ export async function updateTwitterCapture(tabId: number, capture: TwitterCaptur
     state.revision += 1;
     await writeTabState(state);
     return state;
+  });
+}
+
+export async function updateTikTokPhotos(tabId: number, value: unknown): Promise<void> {
+  await mutateTab(tabId, async () => {
+    const tab = await chrome.tabs.get(tabId);
+    const capture = validateTikTokPhotos(value, tab.url ?? "");
+    if (!capture) return;
+    const state = await readTabState(tabId);
+    state.tiktokPhotos = capture;
+    state.revision += 1;
+    await writeTabState(state);
   });
 }
 

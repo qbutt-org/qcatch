@@ -1,5 +1,6 @@
 import { classifyMedia, detectProvider, isInterestingMedia } from "../shared/media.ts";
 import { extractTwitterCapture } from "../shared/twitter-media.ts";
+import { extractTikTokPhotos } from "../shared/tiktok-photos.ts";
 import type { CapturePayload } from "../shared/types.ts";
 
 const CAPTURE_CHANNEL = "qcatch:capture";
@@ -48,6 +49,16 @@ function captureTwitterResponse(value: unknown): void {
   if (capture) window.postMessage({ capture, channel: TWITTER_CHANNEL }, "*");
 }
 
+function isTikTokItemResponse(value: string): boolean {
+  return location.hostname === "www.tiktok.com"
+    && value.startsWith(`${location.origin}/api/item/detail/?`);
+}
+
+function captureTikTokPhotos(body: string): void {
+  const capture = extractTikTokPhotos(body, location.href);
+  if (capture) window.postMessage({ capture, channel: "qcatch:tiktok-photos" }, "*");
+}
+
 function isProviderApi(url: string): boolean {
   return detectProvider(url, location.href) !== "unknown"
     && /(?:\/ftor\b|\/playlist\b|\/video\/|manifest|source)/i.test(url);
@@ -92,7 +103,8 @@ async function captureFetchResponse(response: Response, method: string, requestU
   const length = Number(response.headers.get("content-length") ?? 0);
   const kind = classifyMedia(url, contentType);
   const twitterResponse = isTwitterTweetResponse(url);
-  const textResponse = kind === "hls" || kind === "dash" || isProviderApi(url) || twitterResponse;
+  const tiktokResponse = isTikTokItemResponse(url);
+  const textResponse = kind === "hls" || kind === "dash" || isProviderApi(url) || twitterResponse || tiktokResponse;
   if (!textResponse || length > MAX_TEXT_LENGTH) return;
 
   try {
@@ -117,6 +129,7 @@ async function captureFetchResponse(response: Response, method: string, requestU
     }
     if (body.length <= MAX_TEXT_LENGTH) {
       if (twitterResponse) captureTwitterResponse(body);
+      else if (tiktokResponse) captureTikTokPhotos(body);
       else capture(url, { body, contentType, method, status: response.status, requestUrl });
     }
   } catch {
@@ -154,6 +167,15 @@ XMLHttpRequest.prototype.send = function send(body?: Document | XMLHttpRequestBo
     const contentType = this.getResponseHeader("content-type") ?? "";
     const kind = classifyMedia(request.url, contentType);
     const twitterResponse = isTwitterTweetResponse(request.url);
+    if (isTikTokItemResponse(request.url)) {
+      try {
+        const body = this.responseType === "json" ? JSON.stringify(this.response) : this.responseText;
+        if (body.length <= MAX_TEXT_LENGTH) captureTikTokPhotos(body);
+      } catch {
+        // A response body may be unavailable to the page.
+      }
+      return;
+    }
     if (twitterResponse) {
       try {
         const response = this.responseType === "json" ? this.response : this.responseText;
@@ -209,7 +231,11 @@ function scheduleMediaScan(): void {
   }, 250);
 }
 
-document.addEventListener("DOMContentLoaded", scheduleMediaScan, { once: true });
+document.addEventListener("DOMContentLoaded", () => {
+  scheduleMediaScan();
+  const body = document.getElementById("__UNIVERSAL_DATA_FOR_REHYDRATION__")?.textContent;
+  if (body && body.length <= MAX_TEXT_LENGTH) captureTikTokPhotos(body);
+}, { once: true });
 document.addEventListener("qbutt:start-capture", () => {
   for (const payload of probeCaptures.values()) {
     window.postMessage({ channel: CAPTURE_CHANNEL, payload }, "*");

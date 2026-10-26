@@ -2,6 +2,7 @@ import "../connection/content.ts";
 import "../connection/document-fetch.ts";
 import { classifyMedia, detectProvider } from "../shared/media.ts";
 import { validateTwitterCapture } from "../shared/twitter-media.ts";
+import { validateTikTokPhotos } from "../shared/tiktok-photos.ts";
 import type { BackgroundMessage, CapturePayload, YummyProbeSource, YummySource } from "../shared/types.ts";
 import {
   collectYummyCatalog,
@@ -64,6 +65,10 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
   if (data.channel === TWITTER_CHANNEL) {
     const capture = validateTwitterCapture(data.capture, location.href);
     if (capture) send({ capture, type: "bridge:twitter" });
+  }
+  if (data.channel === "qcatch:tiktok-photos" && window === window.top) {
+    const capture = validateTikTokPhotos(data.capture, location.href);
+    if (capture) send({ capture, type: "bridge:tiktok-photos" });
   }
 });
 
