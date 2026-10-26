@@ -1,6 +1,6 @@
 {
   "name": "qcatch",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "private": true,
   "type": "module",
   "description": "A local-first browser extension for downloading accessible HLS, DASH, audio, and subtitle tracks.",

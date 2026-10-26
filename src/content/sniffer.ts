@@ -1,7 +1,13 @@
-import { classifyMedia, detectProvider, isInterestingMedia } from "../shared/media.ts";
+import {
+  classifyMedia,
+  detectProvider,
+  isInterestingMedia,
+  normalizedHeaders,
+  scopedHeaders,
+} from "../shared/media.ts";
 import { extractTwitterCapture } from "../shared/twitter-media.ts";
 import { extractTikTokPhotos } from "../shared/tiktok-photos.ts";
-import type { CapturePayload } from "../shared/types.ts";
+import type { CapturedHeader, CapturePayload } from "../shared/types.ts";
 
 const CAPTURE_CHANNEL = "qcatch:capture";
 const TWITTER_CHANNEL = "qcatch:twitter";
@@ -9,8 +15,9 @@ const MAX_TEXT_LENGTH = 4 * 1024 * 1024;
 const originalFetch = window.fetch;
 const originalOpen = XMLHttpRequest.prototype.open;
 const originalSend = XMLHttpRequest.prototype.send;
-const requestUrls = new WeakMap<XMLHttpRequest, { method: string; url: string }>();
-const probeCaptures = new Map<string, CapturePayload>();
+const originalSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
+const requestUrls = new WeakMap<XMLHttpRequest, { method: string; url: string; headers: Headers }>();
+const recentCaptures = new Map<string, CapturePayload>();
 
 function httpUrl(value: string | URL): string | undefined {
   try {
@@ -21,15 +28,19 @@ function httpUrl(value: string | URL): string | undefined {
   }
 }
 
-function post(payload: CapturePayload): void {
-  if (window.name === "qbutt:player") {
-    const previous = probeCaptures.get(payload.url);
-    if (probeCaptures.size < 24 || previous) {
-      // Response metadata starts a new body; URL-only observations do not.
-      const body = payload.body ?? (payload.status === undefined ? previous?.body ?? "" : "");
-      probeCaptures.set(payload.url, { ...previous, ...payload, body });
+function post(payload: CapturePayload, headers?: CapturedHeader[]): void {
+  if (payload.kind !== "segment") {
+    const previous = recentCaptures.get(payload.url);
+    // Response metadata starts a new body; URL-only observations do not.
+    const body = payload.body ?? (payload.status === undefined ? previous?.body ?? "" : "");
+    recentCaptures.delete(payload.url);
+    recentCaptures.set(payload.url, { ...previous, ...payload, body, ...(headers ? { headers } : {}) });
+    while (recentCaptures.size > 24
+      || [...recentCaptures.values()].reduce((size, capture) => size + (capture.body?.length ?? 0), 0) > MAX_TEXT_LENGTH) {
+      recentCaptures.delete(recentCaptures.keys().next().value!);
     }
   }
+  // Live capture gets complete headers from webRequest. Replay retains page-provided headers.
   window.postMessage({ channel: CAPTURE_CHANNEL, payload }, "*");
 }
 
@@ -72,6 +83,7 @@ function capture(
     method?: string;
     status?: number;
     requestUrl?: string;
+    headers?: CapturedHeader[];
   } = {},
 ): void {
   if (!/^https?:/i.test(url)) return;
@@ -92,13 +104,18 @@ function capture(
     ...(options.method ? { method: options.method } : {}),
     ...(options.status !== undefined ? { status: options.status } : {}),
     ...(options.requestUrl ? { requestUrl: options.requestUrl } : {}),
-  });
+  }, options.headers);
 }
 
-async function captureFetchResponse(response: Response, method: string, requestUrl: string): Promise<void> {
+async function captureFetchResponse(
+  response: Response,
+  method: string,
+  requestUrl: string,
+  headers: CapturedHeader[],
+): Promise<void> {
   const url = response.url;
   const contentType = response.headers.get("content-type") ?? "";
-  capture(url, { contentType, method, status: response.status, requestUrl });
+  capture(url, { contentType, method, status: response.status, requestUrl, headers });
 
   const length = Number(response.headers.get("content-length") ?? 0);
   const kind = classifyMedia(url, contentType);
@@ -130,7 +147,7 @@ async function captureFetchResponse(response: Response, method: string, requestU
     if (body.length <= MAX_TEXT_LENGTH) {
       if (twitterResponse) captureTwitterResponse(body);
       else if (tiktokResponse) captureTikTokPhotos(body);
-      else capture(url, { body, contentType, method, status: response.status, requestUrl });
+      else capture(url, { body, contentType, method, status: response.status, requestUrl, headers });
     }
   } catch {
     // Binary and locked response bodies are still captured by URL and headers.
@@ -138,10 +155,12 @@ async function captureFetchResponse(response: Response, method: string, requestU
 }
 
 const interceptedFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  const headers = normalizedHeaders([...new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))]
+    .map(([name, value]) => ({ name, value })));
   const response = await Reflect.apply(originalFetch, window, [input, init]);
   const method = init?.method ?? (input instanceof Request ? input.method : "GET");
   const requestUrl = new URL(input instanceof Request ? input.url : String(input), document.baseURI).href;
-  void captureFetchResponse(response, method, requestUrl);
+  void captureFetchResponse(response, method, requestUrl, scopedHeaders(headers, requestUrl, response.url || requestUrl));
   return response;
 };
 Object.assign(interceptedFetch, originalFetch);
@@ -156,8 +175,13 @@ XMLHttpRequest.prototype.open = function open(
 ): void {
   Reflect.apply(originalOpen, this, [method, url, async, username, password]);
   const resolvedUrl = httpUrl(url);
-  if (resolvedUrl) requestUrls.set(this, { method, url: resolvedUrl });
+  if (resolvedUrl) requestUrls.set(this, { method, url: resolvedUrl, headers: new Headers() });
   else requestUrls.delete(this);
+};
+
+XMLHttpRequest.prototype.setRequestHeader = function setRequestHeader(name: string, value: string): void {
+  originalSetRequestHeader.call(this, name, value);
+  requestUrls.get(this)?.headers.append(name, value);
 };
 
 XMLHttpRequest.prototype.send = function send(body?: Document | XMLHttpRequestBodyInit | null): void {
@@ -197,6 +221,11 @@ XMLHttpRequest.prototype.send = function send(body?: Document | XMLHttpRequestBo
     }
     const finalUrl = this.responseURL || request.url;
     capture(finalUrl, {
+      headers: scopedHeaders(
+        normalizedHeaders([...request.headers].map(([name, value]) => ({ name, value }))),
+        request.url,
+        finalUrl,
+      ),
       contentType,
       method: request.method,
       status: this.status,
@@ -236,11 +265,16 @@ document.addEventListener("DOMContentLoaded", () => {
   const body = document.getElementById("__UNIVERSAL_DATA_FOR_REHYDRATION__")?.textContent;
   if (body && body.length <= MAX_TEXT_LENGTH) captureTikTokPhotos(body);
 }, { once: true });
-document.addEventListener("qbutt:start-capture", () => {
-  for (const payload of probeCaptures.values()) {
+document.addEventListener("qbutt:start-capture", event => {
+  const requestId = (event as CustomEvent<unknown>).detail;
+  const captures = [...recentCaptures.values()].filter(capture => capture.initiator === location.href);
+  if (typeof requestId === "string") {
+    window.postMessage({ channel: "qcatch:replay", requestId, captures }, "*");
+    return;
+  }
+  for (const payload of captures) {
     window.postMessage({ channel: CAPTURE_CHANNEL, payload }, "*");
   }
-  probeCaptures.clear();
   scanMediaElements();
 });
 const mediaObservationRoot = document.documentElement;

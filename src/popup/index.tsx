@@ -41,6 +41,7 @@ import {
 } from "./language.tsx";
 
 const EMPTY_QUEUE: QueueSnapshot = { items: [], revision: 0 };
+type StateReply = TabState | { error: string };
 
 if (!chrome.extension.getViews({ type: "popup" }).includes(window)) {
   document.documentElement.classList.add("full-page");
@@ -128,11 +129,12 @@ function UniversalApp() {
           chrome.runtime.sendMessage({
             tabId: tab.id,
             type: "state:get",
-          }) as Promise<TabState>,
+          }) as Promise<StateReply>,
           chrome.runtime.sendMessage({
             type: "queue:get",
           }) as Promise<QueueSnapshot>,
         ]);
+        if ("error" in nextState) throw new Error(nextState.error);
         const preferences = (await chrome.runtime.sendMessage({
           pageUrl: nextState.page.url,
           tabId: tab.id,
@@ -328,7 +330,11 @@ function UniversalApp() {
         }
         void chrome.runtime
           .sendMessage({ tabId, type: "state:get" })
-          .then(setState);
+          .then((nextState: StateReply) => {
+            if ("error" in nextState) setNotice(nextState.error);
+            else setState(nextState);
+          })
+          .catch((error: unknown) => setNotice(error instanceof Error ? error.message : String(error)));
       }
     };
     chrome.runtime.onMessage.addListener(listener);

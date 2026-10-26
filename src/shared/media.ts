@@ -53,15 +53,18 @@ export function isInterestingMedia(kind: MediaKind): boolean {
 }
 
 export function normalizedHeaders(
-  headers: readonly { name: string; value?: string | undefined }[] = [],
+  headers: readonly unknown[] = [],
 ): CapturedHeader[] {
   const allowed = /^(?:accept|accepts-controls|authorization|authorizations|origin|range|referer|x-[\w-]+)$/i;
   const seen = new Set<string>();
   const result: CapturedHeader[] = [];
 
-  for (const header of headers) {
+  for (const entry of headers) {
+    if (!entry || typeof entry !== "object") continue;
+    const header = entry as { name?: unknown; value?: unknown };
+    if (typeof header.name !== "string" || typeof header.value !== "string") continue;
     const name = header.name.trim();
-    const value = header.value?.trim();
+    const value = header.value.trim();
     const key = name.toLowerCase();
     if (!value || !allowed.test(name) || seen.has(key)) continue;
     seen.add(key);

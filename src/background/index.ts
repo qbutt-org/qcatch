@@ -3,7 +3,7 @@ import "./updates.ts";
 import { normalizedHeaders } from "../shared/media.ts";
 import { planYummyJobs } from "../shared/jobs.ts";
 import type { BackgroundMessage, CapturePayload, YummyCatalog } from "../shared/types.ts";
-import { sendYummyMessage } from "./content.ts";
+import { connectTabContent, sendYummyMessage } from "./content.ts";
 import { saveDownload } from "./download.ts";
 import { enqueueDownloads, ensureOffscreenDocument, prepareReplay, releaseReplay } from "./engine.ts";
 import { readPreferences, removePreferences, writePreferences } from "./preferences.ts";
@@ -116,6 +116,7 @@ chrome.runtime.onMessage.addListener((rawMessage: unknown, sender, sendResponse)
         if (tabId === undefined || sender.frameId !== 0) return undefined;
         return updateTikTokPhotos(tabId, message.capture);
       case "state:get":
+        await connectTabContent(message.tabId);
         return readTabState(message.tabId);
       case "preferences:get":
         return readPreferences(message.tabId, message.pageUrl);

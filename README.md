@@ -76,11 +76,11 @@ qcatch поддерживает прямые файлы, HLS и DASH, отдел
 bun install --frozen-lockfile
 bun run check
 bun run bridge:build
-bun run release:build -- v1.2.4
+bun run release:build -- v1.2.5
 ```
 
 См. [архитектуру](docs/ARCHITECTURE.md) и [правила проекта](AGENTS.md).
 
 ## Лицензия
 
-qcatch распространяется по [AGPL-3.0-or-later](LICENSE). Лицензии сторонних компонентов приведены в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Исходники qcatch доступны в [теге v1.2.4](https://github.com/qbutt-org/qcatch/tree/v1.2.4); точные исходники зависимостей — в отдельном [техническом архиве](https://github.com/qbutt-org/qcatch/releases/download/v1.2.4-sources/qcatch-1.2.4-runtime-sources.zip).
+qcatch распространяется по [AGPL-3.0-or-later](LICENSE). Лицензии сторонних компонентов приведены в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Исходники qcatch доступны в [теге v1.2.5](https://github.com/qbutt-org/qcatch/tree/v1.2.5); точные исходники зависимостей — в отдельном [техническом архиве](https://github.com/qbutt-org/qcatch/releases/download/v1.2.5-sources/qcatch-1.2.5-runtime-sources.zip).

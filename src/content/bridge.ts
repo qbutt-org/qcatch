@@ -1,6 +1,6 @@
 import "../connection/content.ts";
 import "../connection/document-fetch.ts";
-import { classifyMedia, detectProvider } from "../shared/media.ts";
+import { classifyMedia, detectProvider, normalizedHeaders } from "../shared/media.ts";
 import { validateTwitterCapture } from "../shared/twitter-media.ts";
 import { validateTikTokPhotos } from "../shared/tiktok-photos.ts";
 import type { BackgroundMessage, CapturePayload, YummyProbeSource, YummySource } from "../shared/types.ts";
@@ -17,8 +17,8 @@ const CAPTURE_CHANNEL = "qcatch:capture";
 const TWITTER_CHANNEL = "qcatch:twitter";
 const MAX_CAPTURE_BODY = 4 * 1024 * 1024;
 
-function send(message: BackgroundMessage): void {
-  void chrome.runtime.sendMessage(message).catch(() => undefined);
+function send(message: BackgroundMessage): Promise<unknown> {
+  return chrome.runtime.sendMessage(message).catch(() => undefined);
 }
 
 function pageCapture(value: unknown): CapturePayload | undefined {
@@ -28,6 +28,7 @@ function pageCapture(value: unknown): CapturePayload | undefined {
   const body = typeof candidate.body === "string" && candidate.body.length <= MAX_CAPTURE_BODY ? candidate.body : "";
   const contentType = typeof candidate.contentType === "string" ? candidate.contentType.slice(0, 256) : "";
   const method = typeof candidate.method === "string" ? candidate.method.slice(0, 16) : "";
+  const headers = Array.isArray(candidate.headers) ? normalizedHeaders(candidate.headers.slice(0, 64)) : [];
   const status = typeof candidate.status === "number" && Number.isInteger(candidate.status)
     ? Math.max(0, Math.min(599, candidate.status))
     : undefined;
@@ -42,6 +43,7 @@ function pageCapture(value: unknown): CapturePayload | undefined {
     ...(body ? { body } : {}),
     ...(contentType ? { contentType } : {}),
     ...(method ? { method } : {}),
+    ...(headers.length ? { headers } : {}),
     ...(probe ? { probe } : {}),
     ...(status !== undefined ? { status } : {}),
   };
@@ -72,12 +74,13 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
   }
 });
 
-function captureDomMedia(): void {
+async function captureDomMedia(): Promise<void> {
+  const pending: Promise<unknown>[] = [];
   const probe = currentYummyProbe();
   for (const element of document.querySelectorAll<HTMLMediaElement>("audio,video")) {
     for (const url of [element.currentSrc, element.src]) {
       if (!url || !/^https?:/i.test(url)) continue;
-      send({
+      pending.push(send({
         payload: {
           detectedAt: Date.now(),
           initiator: location.href,
@@ -88,11 +91,11 @@ function captureDomMedia(): void {
           ...(probe ? { probe } : {}),
         },
         type: "bridge:capture",
-      });
+      }));
     }
 
     for (const track of element.querySelectorAll<HTMLTrackElement>("track[src]")) {
-      send({
+      pending.push(send({
         payload: {
           contentType: "text/vtt",
           detectedAt: Date.now(),
@@ -108,25 +111,54 @@ function captureDomMedia(): void {
           ...(probe ? { probe } : {}),
         },
         type: "bridge:capture",
-      });
+      }));
     }
   }
+  await Promise.all(pending);
 }
 
-function scan(): void {
-  captureDomMedia();
+async function scan(): Promise<void> {
+  const media = captureDomMedia();
   if (window === window.top) {
     const page = scanPageContext();
     const fingerprint = JSON.stringify(page);
     if (fingerprint !== lastPageFingerprint) {
       lastPageFingerprint = fingerprint;
-      send({ page, type: "bridge:page" });
+      await send({ page, type: "bridge:page" });
     }
   }
+  await media;
 }
 
 let lastPageFingerprint = "";
 let scanTimer: number | undefined;
+
+function replayCaptures(): Promise<void> {
+  const requestId = crypto.randomUUID();
+  return new Promise(resolve => {
+    const finish = () => {
+      clearTimeout(timeout);
+      window.removeEventListener("message", receive);
+      resolve();
+    };
+    const receive = (event: MessageEvent) => {
+      const message = event.data;
+      if (event.source !== window || message?.channel !== "qcatch:replay"
+        || message.requestId !== requestId || !Array.isArray(message.captures)
+        || message.captures.length > 24) return;
+      clearTimeout(timeout);
+      window.removeEventListener("message", receive);
+      const captures = (message.captures as unknown[]).map(pageCapture)
+        .filter(capture => capture !== undefined);
+      void Promise.all(captures.map(payload => send({ payload, type: "bridge:capture" }))).then(finish);
+    };
+    // Older pages may have no replay-capable MAIN script; DOM discovery still runs.
+    const timeout = window.setTimeout(finish, 1000);
+    window.addEventListener("message", receive);
+    document.dispatchEvent(new CustomEvent("qbutt:start-capture", { detail: requestId }));
+  });
+}
+
 function scheduleScan(): void {
   if (scanTimer !== undefined) return;
   scanTimer = window.setTimeout(() => {
@@ -146,6 +178,10 @@ chrome.runtime.onMessage.addListener((message: unknown) => {
 });
 
 chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
+  if (message && typeof message === "object" && (message as { type?: string }).type === "bridge:refresh") {
+    void replayCaptures().then(scan).then(() => sendResponse({ ready: true }));
+    return true;
+  }
   if (!message || typeof message !== "object" || window !== window.top) return;
   const request = message as {
     episode?: number;
@@ -190,7 +226,8 @@ function nudgeProbePlayer(): void {
   }, 400);
 }
 
-document.addEventListener("DOMContentLoaded", scheduleScan, { once: true });
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", scheduleScan, { once: true });
+else scheduleScan();
 preferMaximumAllohaProbeQuality();
 listenForAllohaCatalogRequests();
 nudgeProbePlayer();
