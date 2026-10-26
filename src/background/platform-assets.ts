@@ -154,20 +154,21 @@ async function readPageAssets(
           throw new Error(
             "The source did not return this media. Open it in the site's player and retry.",
           );
-        if (pin.embed?.src && pin.domain !== "uploaded by user") {
-          throw new Error(
-            "This pin links to another site's video. Open its original source and download it there.",
-          );
-        }
         const url = https(pin.images?.orig?.url);
         if (!url)
           throw new Error(
             "This pin has no downloadable media. Open the original source instead.",
           );
-        assets.push({
-          url,
-          kind: /\.gif(?:[?#]|$)/i.test(url) ? "gif" : "photo",
-        });
+        const kind = /\.gif(?:[?#]|$)/i.test(url) ? "gif" : "photo";
+        if (
+          kind === "photo" &&
+          pin.embed?.src &&
+          pin.domain !== "uploaded by user"
+        )
+          throw new Error(
+            "This pin links to another site's video. Open its original source and download it there.",
+          );
+        assets.push({ url, kind });
       }
       result = {
         title: pin.title || pin.grid_title || `Pinterest ${reference.id}`,
