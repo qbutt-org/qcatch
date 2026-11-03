@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="../site.css">
   <link rel="alternate" hreflang="ru" href="https://qbutt-org.github.io/qcatch/">
   <script src="../locale.js"></script>
+  <script src="../downloads.js" defer></script>
 </head>
 <body>
   <header>
@@ -32,8 +33,13 @@
         <h1>Save videos<br>from your browser</h1>
         <p class="intro">Choose a video, audio tracks and subtitles found on the current page. Save them to your computer or open the video in qplay.</p>
         <div class="actions">
-          <a class="download" href="https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-setup.exe">Download for Windows</a>
-          <a href="https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-portable.zip">Portable</a>
+          <details class="editions">
+            <summary class="download" data-all-label="All downloads">Download</summary>
+            <a href="https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-setup.exe"
+              data-platform="windows-x64"
+              data-download-label="Download for Windows">Windows x64 (installer)</a>
+            <a href="https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-portable.zip">Windows x64 (Portable)</a>
+          </details>
         </div>
         <p class="note">For Edge and Chrome. The extension currently requires manual installation.</p>
       </div>

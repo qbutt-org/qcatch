@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="site.css">
   <link rel="alternate" hreflang="en" href="https://qbutt-org.github.io/qcatch/en/">
   <script src="locale.js"></script>
+  <script src="downloads.js" defer></script>
 </head>
 <body>
   <header>
@@ -32,8 +33,13 @@
         <h1>Сохраняйте видео<br>из браузера</h1>
         <p class="intro">Выбирайте найденное видео, звуковые дорожки и субтитры на открытой странице. Сохраняйте их на компьютер или открывайте видео в qplay.</p>
         <div class="actions">
-          <a class="download" href="https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-setup.exe">Скачать для Windows</a>
-          <a href="https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-portable.zip">Portable</a>
+          <details class="editions">
+            <summary class="download" data-all-label="Все сборки">Скачать</summary>
+            <a href="https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-setup.exe"
+              data-platform="windows-x64"
+              data-download-label="Скачать для Windows">Windows x64 (установщик)</a>
+            <a href="https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-portable.zip">Windows x64 (Portable)</a>
+          </details>
         </div>
         <p class="note">Для Edge и Chrome. Расширение пока устанавливается вручную.</p>
       </div>
