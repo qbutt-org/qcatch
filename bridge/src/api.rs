@@ -840,7 +840,7 @@ fn worker(
                 let result = app_update::prepare(&home, &cancel);
                 let mut data = state.lock().unwrap();
                 data.update = match result {
-                    Err(error) => app_update::State::Failed(error.to_string()),
+                    Err(error) => app_update::State::Failed(format!("{error:#}")),
                     Ok(_) if cancel.load(Ordering::Acquire) => app_update::State::Idle,
                     Ok(Some(update)) => app_update::State::Ready(update),
                     Ok(None) => app_update::State::Current,
