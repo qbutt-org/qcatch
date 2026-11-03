@@ -615,6 +615,7 @@ name = "qcatch"
 version = "1.2.6"
 dependencies = [
  "anyhow",
+ "libc",
  "reqwest",
  "serde",
  "serde_json",

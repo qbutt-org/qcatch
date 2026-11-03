@@ -2,7 +2,6 @@ use std::{
     collections::HashMap,
     fs,
     io::Read,
-    os::windows::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, RwLock, RwLockReadGuard,
@@ -17,7 +16,6 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
-use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 
 use crate::{
     Config, EXTENSION_ID, PORT, app_update, cookies::BrowserCookie, download, platform, services,
@@ -77,6 +75,12 @@ pub struct State {
 pub type Shared = Arc<Mutex<State>>;
 type SharedTools = Arc<RwLock<Tools>>;
 
+#[derive(Default)]
+struct InfoTasks {
+    cancel: Arc<AtomicBool>,
+    workers: Vec<thread::JoinHandle<()>>,
+}
+
 enum Task {
     Prepare,
     CheckUpdate {
@@ -130,7 +134,8 @@ pub fn serve(
     let shared = Arc::clone(&state);
     let worker_home = home.clone();
     let worker_desktop = desktop.clone();
-    thread::spawn(move || worker(receiver, shared, worker_tools, worker_home, worker_desktop));
+    let worker =
+        thread::spawn(move || worker(receiver, shared, worker_tools, worker_home, worker_desktop));
     sender.send(Task::Prepare)?;
     let mut origins = vec![format!("chrome-extension://{}", EXTENSION_ID.trim())];
     origins.extend(
@@ -140,6 +145,7 @@ pub fn serve(
             .map(|id| format!("chrome-extension://{id}")),
     );
     let mut next_update = Instant::now();
+    let mut info_tasks = InfoTasks::default();
     while !control.stopping(0)? {
         {
             let mut data = state.lock().unwrap();
@@ -208,7 +214,15 @@ pub fn serve(
             );
             continue;
         }
-        let result = route(&mut request, &state, &tools, &sender, &home, &desktop);
+        let result = route(
+            &mut request,
+            &state,
+            &tools,
+            &sender,
+            &home,
+            &desktop,
+            &mut info_tasks,
+        );
         match result {
             Ok((code, value)) => respond(request, code, value, origin.as_deref()),
             Err(error) => respond(
@@ -219,10 +233,21 @@ pub fn serve(
             ),
         }
     }
+    control.request_stop()?;
     state.lock().unwrap().update.cancel_check();
+    info_tasks.cancel.store(true, Ordering::Release);
     for cancel in state.lock().unwrap().cancel.values() {
         cancel.store(true, Ordering::Relaxed);
     }
+    drop(sender);
+    for worker in info_tasks.workers {
+        worker
+            .join()
+            .map_err(|_| anyhow::anyhow!("Media information worker failed during shutdown"))?;
+    }
+    worker
+        .join()
+        .map_err(|_| anyhow::anyhow!("Download worker failed during shutdown"))?;
     persist(&state.lock().unwrap(), &home)?;
     Ok(())
 }
@@ -355,6 +380,7 @@ fn route(
     sender: &mpsc::Sender<Task>,
     home: &Path,
     desktop: &Path,
+    info_tasks: &mut InfoTasks,
 ) -> Result<(u16, Value)> {
     let path = request.url().to_owned();
     if request.method() == &Method::Post && path != "/updates/apply" {
@@ -527,7 +553,6 @@ fn route(
             Ok((200, json!({"opened":true})))
         }
         (&Method::Post, "/handoff") => {
-            use std::os::windows::process::CommandExt;
             let input: HandoffRequest = body(request)?;
             let uri = url::Url::parse(&input.uri)?;
             ensure!(
@@ -541,10 +566,14 @@ fn route(
             );
             let executable =
                 crate::browser::application("qbutt").context("qbutt не установлен.")?;
-            std::process::Command::new(executable)
-                .arg(&input.uri)
-                .creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0)
-                .spawn()?;
+            let mut command = std::process::Command::new(executable);
+            command.arg(&input.uri);
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                command.creation_flags(windows::Win32::System::Threading::CREATE_NO_WINDOW.0);
+            }
+            command.spawn()?;
             Ok((200, json!({"opened":true})))
         }
         (&Method::Post, "/tools/retry") => {
@@ -593,9 +622,11 @@ fn route(
                 let url = url.clone();
                 let home = home.to_owned();
                 let cookies = input.cookies;
-                thread::spawn(move || {
+                let cancel = Arc::clone(&info_tasks.cancel);
+                info_tasks.workers.retain(|worker| !worker.is_finished());
+                info_tasks.workers.push(thread::spawn(move || {
                     let result = current_tools(&tools, &state)
-                        .and_then(|tools| download::info(&tools, &url, &home, &cookies));
+                        .and_then(|tools| download::info(&tools, &url, &home, &cookies, &cancel));
                     let entry = match result {
                         Ok(info) => InfoState {
                             status: "ready",
@@ -609,7 +640,7 @@ fn route(
                         },
                     };
                     state.lock().unwrap().info.insert(url, entry);
-                });
+                }));
             }
             Ok((200, serde_json::to_value(&data.info[&url])?))
         }
@@ -896,7 +927,7 @@ fn cleanup_stale(home: &Path, desktop: &Path, jobs: &[Job]) -> Result<()> {
     let temporary = home.join("temp");
     if let Ok(metadata) = fs::symlink_metadata(&temporary)
         && metadata.is_dir()
-        && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 == 0
+        && !platform::is_link(&metadata)
     {
         let root = fs::canonicalize(&temporary)?;
         if root.parent() == Some(home.as_path()) {
@@ -908,9 +939,7 @@ fn cleanup_stale(home: &Path, desktop: &Path, jobs: &[Job]) -> Result<()> {
                     continue;
                 }
                 let metadata = fs::symlink_metadata(entry.path())?;
-                if !metadata.is_dir()
-                    || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
-                {
+                if !metadata.is_dir() || platform::is_link(&metadata) {
                     continue;
                 }
                 let path = fs::canonicalize(entry.path())?;
@@ -934,7 +963,7 @@ fn cleanup_stale(home: &Path, desktop: &Path, jobs: &[Job]) -> Result<()> {
         let Ok(metadata) = fs::symlink_metadata(&path) else {
             continue;
         };
-        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+        if platform::is_link(&metadata) {
             continue;
         }
         let path = fs::canonicalize(path)?;

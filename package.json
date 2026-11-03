@@ -7,11 +7,12 @@
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "build": "bun run scripts/build.ts",
-    "bridge:build": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File bridge/build.ps1",
+    "bridge:build": "bun run scripts/build-bridge.ts",
     "check": "bun run typecheck && bun run build",
     "clean": "bun run scripts/clean.ts",
     "icons": "bun run scripts/icons.ts",
     "integration:product-actions": "bun run scripts/integration-product-actions.ts",
+    "integration:linux": "bun run scripts/integration-linux.ts",
     "integration:vk-resolve": "bun run scripts/integration-vk-resolve.ts",
     "package": "bun run scripts/package.ts",
     "release:build": "bun run scripts/release.ts",

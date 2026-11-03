@@ -1,12 +1,11 @@
 use std::{
-    fs::{self, File, OpenOptions},
-    os::windows::fs::{MetadataExt, OpenOptionsExt},
+    fs::{self, File},
     path::{Path, PathBuf},
 };
 
+use crate::platform;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
-use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -66,16 +65,13 @@ impl CookieJar {
         let directory = home
             .join(if playback { "playback" } else { "temp" })
             .join(uuid::Uuid::new_v4().to_string());
+        #[cfg(windows)]
         fs::create_dir_all(&directory)?;
+        #[cfg(target_os = "linux")]
+        platform::private_directory(&directory)?;
         let file = directory.join("cookies.txt");
         let lease = playback
-            .then(|| {
-                OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .share_mode(0)
-                    .open(directory.join("lease.lock"))
-            })
+            .then(|| platform::lease(&directory.join("lease.lock"), true))
             .transpose()?;
         let jar = Self {
             directory,
@@ -130,7 +126,8 @@ impl CookieJar {
             text.len() <= 256 * 1024,
             "Browser cookie data is too large."
         );
-        fs::write(&jar.file, text)?;
+        use std::io::Write;
+        platform::private_file(&jar.file)?.write_all(text.as_bytes())?;
         Ok(Some(jar))
     }
 
@@ -153,7 +150,7 @@ pub fn cleanup_playback(home: &Path) -> Result<()> {
     let Ok(metadata) = fs::symlink_metadata(&root) else {
         return Ok(());
     };
-    if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+    if !metadata.is_dir() || platform::is_link(&metadata) {
         return Ok(());
     }
     for entry in fs::read_dir(&root)?.take(1000) {
@@ -166,17 +163,14 @@ pub fn cleanup_playback(home: &Path) -> Result<()> {
             continue;
         }
         let metadata = fs::symlink_metadata(entry.path())?;
-        if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+        if !metadata.is_dir() || platform::is_link(&metadata) {
             continue;
         }
-        let lease = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .share_mode(0)
-            .open(entry.path().join("lease.lock"));
+        let lease = platform::lease(&entry.path().join("lease.lock"), false);
         match lease {
             Ok(lease) => drop(lease),
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => continue,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error.into()),
         }

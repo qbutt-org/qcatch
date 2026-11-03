@@ -4,6 +4,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { zipSync } from "fflate";
 
 const root = resolve(import.meta.dir, "..");
+const nativeTarget = process.platform === "linux" ? "x86_64-unknown-linux-gnu" : "x86_64-pc-windows-msvc";
 const licenseName = /^(LICENSE|COPYING|NOTICE|COPYRIGHT)([-_.].*)?$/i;
 
 type CargoPackage = {
@@ -47,7 +48,7 @@ async function licenseFiles(directory: string): Promise<string[]> {
 function nativePackages(): CargoPackage[] {
   const metadata = JSON.parse(command([
     "cargo", "metadata", "--locked", "--offline", "--format-version", "1",
-    "--filter-platform", "x86_64-pc-windows-msvc",
+    "--filter-platform", nativeTarget,
   ], join(root, "bridge"))) as CargoMetadata;
   return metadata.packages.filter((item) => item.source !== null)
     .sort((a, b) => `${a.name}-${a.version}`.localeCompare(`${b.name}-${b.version}`, "en"));
@@ -107,10 +108,10 @@ export async function copyNativeLicenses(destination: string): Promise<void> {
   await cp(join(rustDocumentation, "COPYRIGHT-library.html"), join(destination, "rust-standard-library/COPYRIGHT-library.html"));
   await cp(join(rustDocumentation, "licenses"), join(destination, "rust-standard-library/licenses"), { recursive: true });
   await Bun.write(join(destination, "rust-dependencies.json"), JSON.stringify({
-    target: "x86_64-pc-windows-msvc",
+    target: nativeTarget,
     rustCompiler: command(["rustc", "--version", "--verbose"]),
     cargoLockSha256: sha256(await Bun.file(join(root, "bridge/Cargo.lock")).bytes()),
-    scope: "Complete locked Windows dependency graph, including build dependencies.",
+    scope: "Complete locked native dependency graph, including build dependencies.",
     packages: notices,
   }, null, 2) + "\n");
 }

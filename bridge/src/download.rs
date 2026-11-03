@@ -1,7 +1,6 @@
 use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
-    os::windows::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -14,7 +13,6 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::Value;
-use windows::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
 
 use crate::{
     api::{Job, Shared, VideoInfo},
@@ -25,8 +23,8 @@ use crate::{
 
 pub(crate) fn command(executable: &Path) -> Command {
     let mut command = Command::new(executable);
+    platform::download_command(&mut command);
     command
-        .creation_flags((CREATE_NO_WINDOW | CREATE_SUSPENDED).0)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -34,7 +32,7 @@ pub(crate) fn command(executable: &Path) -> Command {
 }
 
 pub(crate) fn yt_dlp(tools: &Tools, cookies: Option<&CookieJar>) -> Command {
-    let mut command = command(&tools.directory.join("yt-dlp.exe"));
+    let mut command = command(&tools.executable("yt-dlp"));
     command
         .args([
             "--ignore-config",
@@ -53,10 +51,7 @@ pub(crate) fn yt_dlp(tools: &Tools, cookies: Option<&CookieJar>) -> Command {
             "--no-js-runtimes",
             "--js-runtimes",
         ])
-        .arg(format!(
-            "deno:{}",
-            tools.directory.join("deno.exe").display()
-        ))
+        .arg(format!("deno:{}", tools.executable("deno").display()))
         .arg("--ffmpeg-location")
         .arg(&tools.directory);
     if let Some(cookies) = cookies {
@@ -110,12 +105,15 @@ fn video_info(value: &Value, url: &str) -> Result<VideoInfo> {
     })
 }
 
-pub fn info(tools: &Tools, url: &str, home: &Path, cookies: &[BrowserCookie]) -> Result<VideoInfo> {
+pub fn info(
+    tools: &Tools,
+    url: &str,
+    home: &Path,
+    cookies: &[BrowserCookie],
+    cancel: &AtomicBool,
+) -> Result<VideoInfo> {
     let jar = CookieJar::new(home, cookies)?;
-    video_info(
-        &metadata(tools, url, &AtomicBool::new(false), jar.as_ref())?,
-        url,
-    )
+    video_info(&metadata(tools, url, cancel, jar.as_ref())?, url)
 }
 
 fn number(value: &Value, field: &str) -> f64 {
@@ -315,7 +313,7 @@ fn command_for_conversion(
     formats: &[&Value],
     trimmed: bool,
 ) -> Command {
-    let mut command = command(&tools.directory.join("ffmpeg.exe"));
+    let mut command = command(&tools.executable("ffmpeg"));
     command.args([
         "-hide_banner",
         "-loglevel",
@@ -382,7 +380,7 @@ fn verify_output(
     trimmed: bool,
     cancel: &AtomicBool,
 ) -> Result<()> {
-    let mut command = command(&tools.directory.join("ffprobe.exe"));
+    let mut command = command(&tools.executable("ffprobe"));
     command
         .args([
             "-v",
@@ -502,6 +500,7 @@ pub(crate) fn process(
             return Err(error);
         }
     };
+    #[cfg(windows)]
     if let Err(error) = platform::resume_child(&child) {
         let _ = containment.terminate();
         let _ = child.wait();
@@ -623,7 +622,7 @@ pub(crate) fn publish_files(
             let staged = staging.join(index.to_string());
             match platform::move_new_file(source, &staged) {
                 Ok(()) => continue,
-                Err(error) if error.raw_os_error() == Some(17) => (),
+                Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => (),
                 Err(error) => return Err(error).context("Could not stage the completed media."),
             }
             let mut input = fs::File::open(source)?;

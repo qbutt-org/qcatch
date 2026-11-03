@@ -321,7 +321,7 @@ fn verify(
         fs::metadata(output)?.len() > 0,
         "The downloaded file is empty."
     );
-    let mut command = command(&tools.directory.join("ffprobe.exe"));
+    let mut command = command(&tools.executable("ffprobe"));
     command
         .args([
             "-v",

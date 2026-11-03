@@ -7,6 +7,10 @@ import { buildRuntimeSourceArchive, copyNativeLicenses } from "./licenses.ts";
 const root = resolve(import.meta.dir, "..");
 const artifacts = join(root, "artifacts");
 const { version } = await Bun.file(join(root, "package.json")).json() as { version: string };
+if (process.platform === "linux") {
+  await import("./release-linux.ts");
+  process.exit(0);
+}
 if (process.argv[2] !== `v${version}` || process.argv.length !== 3 || process.platform !== "win32") {
   throw new Error(`Build on Windows: bun run release:build -- v${version}`);
 }

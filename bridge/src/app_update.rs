@@ -1,7 +1,6 @@
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{Read, Write},
-    os::windows::{fs::MetadataExt, process::CommandExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -16,12 +15,21 @@ use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use windows::Win32::{
-    Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT, System::Threading::CREATE_NO_WINDOW,
-    UI::Shell::FOLDERID_LocalAppData,
-};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+#[cfg(windows)]
+use windows::Win32::System::Threading::CREATE_NO_WINDOW;
 
 use crate::{browser, platform};
+
+#[cfg(windows)]
+const ASSET: &str = "qcatch-setup.exe";
+#[cfg(target_os = "linux")]
+const ASSET: &str = "qcatch-linux-x64.zip";
+#[cfg(windows)]
+const CACHE_SUFFIX: &str = "setup.exe";
+#[cfg(target_os = "linux")]
+const CACHE_SUFFIX: &str = "linux-x64.zip";
 
 pub enum State {
     Disabled,
@@ -75,9 +83,7 @@ struct Asset {
 }
 
 pub fn installation(home: &Path) -> Option<PathBuf> {
-    let expected_home = platform::known_folder(&FOLDERID_LocalAppData)
-        .ok()?
-        .join("qcatch");
+    let expected_home = platform::data_home().ok()?;
     if fs::canonicalize(home).ok()? != fs::canonicalize(expected_home).ok()? {
         return None;
     }
@@ -88,7 +94,7 @@ pub fn installation(home: &Path) -> Option<PathBuf> {
     registered.parent().map(Path::to_path_buf)
 }
 
-fn version(value: &str) -> Option<(u32, u32, u32)> {
+pub(crate) fn version(value: &str) -> Option<(u32, u32, u32)> {
     let mut parts = value.split('.');
     let number = (
         parts.next()?.parse().ok()?,
@@ -104,10 +110,7 @@ fn verified(path: &Path, size: u64, digest: &str) -> Result<bool> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error.into()),
     };
-    if !metadata.is_file()
-        || metadata.len() != size
-        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
-    {
+    if !metadata.is_file() || metadata.len() != size || platform::is_link(&metadata) {
         return Ok(false);
     }
     let mut file = File::open(path)?;
@@ -129,7 +132,7 @@ fn cleanup_updates(directory: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error.into()),
     };
-    if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+    if !metadata.is_dir() || platform::is_link(&metadata) {
         return Err(anyhow::anyhow!("Invalid update cache directory."));
     }
     let current = version(env!("CARGO_PKG_VERSION")).expect("compiled qcatch version");
@@ -139,7 +142,7 @@ fn cleanup_updates(directory: &Path) -> Result<()> {
         let Some(name) = name.to_str() else { continue };
         let Some((number, identity)) = name
             .strip_prefix("qcatch-v")
-            .and_then(|name| name.strip_suffix("-setup.exe"))
+            .and_then(|name| name.strip_suffix(&format!("-{CACHE_SUFFIX}")))
             .and_then(|name| name.split_once('-'))
         else {
             continue;
@@ -153,7 +156,7 @@ fn cleanup_updates(directory: &Path) -> Result<()> {
             continue;
         }
         let metadata = fs::symlink_metadata(entry.path())?;
-        if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+        if !metadata.is_file() || platform::is_link(&metadata) {
             continue;
         }
         match fs::remove_file(entry.path()) {
@@ -229,18 +232,15 @@ async fn prepare_update(
     if candidate <= version(env!("CARGO_PKG_VERSION")).expect("compiled qcatch version") {
         return Ok(None);
     }
-    let mut matches = release
-        .assets
-        .iter()
-        .filter(|asset| asset.name == "qcatch-setup.exe");
+    let mut matches = release.assets.iter().filter(|asset| asset.name == ASSET);
     let asset = matches.next().context("qcatch release has no installer.")?;
     ensure!(
         matches.next().is_none()
             && asset.size > 0
-            && asset.size <= 64 * 1024 * 1024
+            && asset.size <= 512 * 1024 * 1024
             && asset.browser_download_url
                 == format!(
-                    "https://github.com/qbutt-org/qcatch/releases/download/{}/qcatch-setup.exe",
+                    "https://github.com/qbutt-org/qcatch/releases/download/{}/{ASSET}",
                     release.tag_name
                 ),
         "Invalid qcatch installer metadata."
@@ -257,12 +257,18 @@ async fn prepare_update(
         })
         .context("qcatch installer has no valid SHA-256 digest.")?;
     let directory = home.join("updates");
+    #[cfg(windows)]
     fs::create_dir_all(&directory)?;
+    #[cfg(target_os = "linux")]
+    platform::private_directory(&directory)?;
     ensure!(
-        fs::symlink_metadata(&directory)?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 == 0,
+        !platform::is_link(&fs::symlink_metadata(&directory)?),
         "Invalid qcatch update directory."
     );
-    let cached = directory.join(format!("qcatch-{}-{digest}-setup.exe", release.tag_name));
+    let cached = directory.join(format!(
+        "qcatch-{}-{digest}-{CACHE_SUFFIX}",
+        release.tag_name
+    ));
     if verified(&cached, asset.size, digest)? {
         return Ok(Some(Prepared {
             version: release.tag_name[1..].into(),
@@ -274,7 +280,7 @@ async fn prepare_update(
 
     let target = if cached.exists() {
         directory.join(format!(
-            "qcatch-{}-{}-setup.exe",
+            "qcatch-{}-{}-{CACHE_SUFFIX}",
             release.tag_name,
             uuid::Uuid::new_v4()
         ))
@@ -286,10 +292,7 @@ async fn prepare_update(
         .send()
         .await?
         .error_for_status()?;
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(partial)?;
+    let mut file = platform::private_file(partial)?;
     *owns_partial = true;
     let mut hash = Sha256::new();
     let mut received = 0_u64;
@@ -323,6 +326,7 @@ impl Prepared {
             verified(&self.path, self.size, &self.digest)?,
             "The qcatch update failed integrity verification."
         );
+        #[cfg(windows)]
         Command::new(&self.path)
             .args([
                 "/VERYSILENT",
@@ -335,6 +339,17 @@ impl Prepared {
             .arg(format!("/QCATCHUPDATE={}", std::process::id()))
             .current_dir(install)
             .creation_flags(CREATE_NO_WINDOW.0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("Could not start the qcatch update.")?;
+        #[cfg(target_os = "linux")]
+        Command::new(std::env::current_exe()?)
+            .arg("--apply-update")
+            .arg(&self.path)
+            .arg(std::process::id().to_string())
+            .current_dir(install)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

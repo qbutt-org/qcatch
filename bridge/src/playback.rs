@@ -1,8 +1,6 @@
 use std::{
     fs::{self, OpenOptions},
     io::{BufRead, BufReader, Read, Write},
-    os::windows::fs::MetadataExt,
-    os::windows::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::mpsc,
@@ -13,13 +11,15 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use windows::Win32::{
-    Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT, System::Threading::CREATE_NO_WINDOW,
-};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+#[cfg(windows)]
+use windows::Win32::System::Threading::CREATE_NO_WINDOW;
 
 use crate::{
     browser,
     cookies::{BrowserCookie, CookieJar},
+    platform,
 };
 
 #[derive(Deserialize, Serialize)]
@@ -67,12 +67,13 @@ pub fn open(request: Request) -> Result<()> {
     let directory = request.home.join("workers");
     fs::create_dir_all(&directory)?;
     ensure!(
-        fs::symlink_metadata(&directory)?.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 == 0,
+        !platform::is_link(&fs::symlink_metadata(&directory)?),
         "Invalid playback worker directory."
     );
     let worker_path = directory.join(format!(
-        "qcatch-playback-{:x}.exe",
-        Sha256::digest(&executable)
+        "qcatch-playback-{:x}{}",
+        Sha256::digest(&executable),
+        std::env::consts::EXE_SUFFIX
     ));
     match OpenOptions::new()
         .write(true)
@@ -88,9 +89,13 @@ pub fn open(request: Request) -> Result<()> {
         }
         Err(error) => return Err(error.into()),
     }
-    let mut worker = Command::new(worker_path)
+    #[cfg(target_os = "linux")]
+    platform::executable(&worker_path)?;
+    let mut command = Command::new(worker_path);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW.0);
+    let mut worker = command
         .arg("--playback")
-        .creation_flags(CREATE_NO_WINDOW.0)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -137,7 +142,7 @@ pub fn cleanup_workers(home: &Path) -> Result<()> {
     let Ok(metadata) = fs::symlink_metadata(&directory) else {
         return Ok(());
     };
-    if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+    if !metadata.is_dir() || platform::is_link(&metadata) {
         return Ok(());
     }
     for entry in fs::read_dir(directory)?.take(1000) {
@@ -146,7 +151,7 @@ pub fn cleanup_workers(home: &Path) -> Result<()> {
         let Some(digest) = name
             .to_str()
             .and_then(|name| name.strip_prefix("qcatch-playback-"))
-            .and_then(|name| name.strip_suffix(".exe"))
+            .and_then(|name| name.strip_suffix(std::env::consts::EXE_SUFFIX))
         else {
             continue;
         };
@@ -154,7 +159,7 @@ pub fn cleanup_workers(home: &Path) -> Result<()> {
             continue;
         }
         let metadata = fs::symlink_metadata(entry.path())?;
-        if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+        if !metadata.is_file() || platform::is_link(&metadata) {
             continue;
         }
         // Windows refuses to remove an executable image while its worker is alive.
@@ -183,8 +188,9 @@ pub fn worker() -> Result<()> {
         let executable = browser::application("qplay").context("qplay is not installed.")?;
         let jar = CookieJar::playback(&request.home, &request.cookies)?;
         let mut command = Command::new(executable);
+        #[cfg(windows)]
+        command.creation_flags(CREATE_NO_WINDOW.0);
         command
-            .creation_flags(CREATE_NO_WINDOW.0)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
