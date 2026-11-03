@@ -10,6 +10,7 @@ const documentId = Array.from(
     (byte) => byte.toString(16).padStart(2, "0"),
 ).join("");
 let capturing = false;
+let clickedPlay = false;
 let playerFrame: HTMLIFrameElement | undefined;
 let documentReady = document.readyState === "complete";
 document.addEventListener("DOMContentLoaded", () => { documentReady = true; }, { once: true });
@@ -87,22 +88,23 @@ function targetUrl(selection: Selection): { url: string; embedded: boolean } {
     return { url: url.href, embedded: matching.length === 1 };
 }
 
+function playMedia(): void {
+    const media = [...document.querySelectorAll<HTMLMediaElement>("video,audio")];
+    for (const element of media) {
+        element.muted = true;
+        void element.play().catch(() => undefined);
+    }
+    const button = document.querySelector<HTMLElement>(".play_button,.play-button,.vjs-big-play-button,.plyr__control--overlaid,[data-action=play],button[data-plyr=play]");
+    if (button && !clickedPlay) { clickedPlay = true; button.click(); }
+}
+
 function startCapture(): void {
-    if (capturing) return;
-    capturing = true;
+    if (!capturing) {
+        capturing = true;
+        document.addEventListener("DOMContentLoaded", playMedia, { once: true });
+    }
     document.dispatchEvent(new Event("qbutt:start-capture"));
-    let clickedPlay = false;
-    const play = () => {
-        const media = [...document.querySelectorAll<HTMLMediaElement>("video,audio")];
-        for (const element of media) {
-            element.muted = true;
-            void element.play().catch(() => undefined);
-        }
-        const button = document.querySelector<HTMLElement>(".play_button,.play-button,.vjs-big-play-button,.plyr__control--overlaid,[data-action=play],button[data-plyr=play]");
-        if (button && !clickedPlay) { clickedPlay = true; button.click(); }
-    };
-    document.addEventListener("DOMContentLoaded", play, { once: true });
-    play();
+    playMedia();
 }
 
 window.addEventListener("message", (event: MessageEvent) => {
