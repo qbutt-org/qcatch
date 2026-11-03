@@ -41,8 +41,11 @@ pub fn relay(arguments: &[OsString]) -> Result<()> {
     let connection = connect()?;
     let mut writer = connection.try_clone()?;
     thread::spawn(move || {
-        let result = forward(io::stdin().lock(), &mut writer);
-        std::process::exit(if result.is_ok() { 0 } else { 1 });
+        if let Err(error) = forward(io::stdin().lock(), &mut writer) {
+            eprintln!("{error:#}");
+            std::process::exit(1);
+        }
+        std::process::exit(0);
     });
     forward(connection, io::stdout().lock())
 }

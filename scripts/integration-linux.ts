@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, link, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -8,6 +8,13 @@ import { join, resolve } from "node:path";
 // FFmpeg, cancellation and cleanup. Only source extraction metadata is generated;
 // no external site is contacted and no browser profile is changed.
 if (process.platform !== "linux") throw new Error("Run this integration on Linux.");
+if (process.env.QCATCH_PRIVATE_BUS !== "1") {
+  const child = Bun.spawn(["dbus-run-session", "--", process.execPath, import.meta.path], {
+    env: { ...process.env, QCATCH_PRIVATE_BUS: "1" },
+    stdin: "inherit", stdout: "inherit", stderr: "inherit",
+  });
+  process.exit(await child.exited);
+}
 const portCheck = Bun.listen({ hostname: "127.0.0.1", port: 47832, socket: { data() {} } });
 portCheck.stop(true);
 const bundle = resolve(process.env.QCATCH_LINUX_BUNDLE ?? "artifacts/qcatch-linux");
@@ -66,6 +73,13 @@ async function api(path: string, body?: unknown): Promise<any> {
   return value;
 }
 
+async function startingHealth(): Promise<any> {
+  try { return await api("/health"); } catch (error: any) {
+    if (error.code === "ConnectionRefused") return null;
+    throw error;
+  }
+}
+
 let slow = false;
 let activeTransfers = 0;
 const media = join(home, "fixture.mp4");
@@ -88,15 +102,17 @@ const server = Bun.serve({
 });
 const socketPath = join(home, "broker.sock");
 const broker = createServer((socket) => socket.on("data", (bytes) => socket.write(bytes)));
+let fileManager: Awaited<ReturnType<typeof import("./linux-file-manager-fixture.ts").fileManagerFixture>> | undefined;
 
 try {
+  fileManager = await (await import("./linux-file-manager-fixture.ts")).fileManagerFixture();
   await mkdir(environment.XDG_CONFIG_HOME, { recursive: true });
   await writeFile(join(environment.XDG_CONFIG_HOME, "user-dirs.dirs"), 'XDG_DESKTOP_DIR="$HOME/Chosen Desktop"\n');
   const version = JSON.parse(await run([source, "--version-json"]));
   check(version.product === "qcatch" && version.protocolVersion === 1, "Product metadata changed");
   await run([source, "--install"]);
   await until(async () => fetch("http://127.0.0.1:47832/health", { headers: { "X-Qcatch": "1", Origin: origin } }).then((r) => r.ok).catch(() => false), Boolean, "installed helper");
-  for (const browser of ["google-chrome", "chromium", "microsoft-edge"]) {
+  for (const browser of ["google-chrome", "google-chrome-for-testing", "chromium", "microsoft-edge"]) {
     const manifest = await Bun.file(join(environment.XDG_CONFIG_HOME, browser, "NativeMessagingHosts/org.qbutt.qcatch.json")).json();
     check(manifest.path === installed && manifest.allowed_origins[0] === `${origin}/`, `Incorrect ${browser} registration`);
   }
@@ -113,7 +129,8 @@ try {
   const connected = JSON.parse(await run([installed, "--connect-browser", "chrome"], 0, { ...environment, PATH: `${browserDirectory}:${environment.PATH}` }));
   check(connected.browser === "chrome" && connected.extensionDirectory === join(data, "app/extension"), "Browser connection metadata changed");
   const browserResult = await until(async () => Bun.file(launched).exists(), Boolean, "browser setup command");
-  check(browserResult && (await Bun.file(launched).json()).browser === "chromium", "Browser setup ignored the selected family default");
+  const selectedBrowser = browserResult ? (await Bun.file(launched).json()).browser : "none";
+  check(selectedBrowser === "chromium", `Browser setup selected ${selectedBrowser} for a Chromium family default`);
   const denied = await fetch("http://127.0.0.1:47832/health", { headers: { "X-Qcatch": "1", Origin: "https://example.invalid" } });
   check(denied.status === 403, "Foreign HTTP origin was accepted");
   await run([installed, "--stop"]);
@@ -126,7 +143,7 @@ try {
   const relayEnv = { ...environment, QBUTT_BROWSER_BRIDGE_DISCOVERY: discovery };
   // A normal helper startup clears the persistent stop request before native relays reconnect.
   const helper = Bun.spawn([installed, "--run"], { env: environment, stdout: "ignore", stderr: "pipe" });
-  await until(() => api("/health"), (value) => value.tools.status === "ready", "verified tools");
+  await until(startingHealth, (value) => value?.tools.status === "ready", "verified tools");
   const relay = Bun.spawn([installed, `${origin}/`], { env: relayEnv, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
   const body = Buffer.from(JSON.stringify({ requestId: "linux-fixture", command: "hello" }));
   const frame = Buffer.alloc(body.length + 4);
@@ -140,14 +157,40 @@ try {
     echoed = Buffer.concat([echoed, next.value]);
   }
   check(echoed.equals(frame), "Native message framing changed");
-  relay.stdin.end();
-  check(await relay.exited === 0, "Native relay did not close with its input");
+  helper.kill("SIGKILL");
+  check(await helper.exited !== 0, "The interrupted helper did not exit");
+  await run([source, "--install"]);
+  const closed = await Promise.race([relay.exited, Bun.sleep(1500).then(() => -1)]);
+  check(closed === 0, "Native relay did not reconnect after installation");
+  await until(startingHealth, (value) => value?.tools.status === "ready", "reinstalled helper");
   await chmod(discovery, 0o644);
   await run([installed, `${origin}/`], 1, relayEnv);
   await chmod(discovery, 0o600);
+  await writeFile(discovery, JSON.stringify({ pipe: socketPath, pid: process.pid + 1 }));
+  await run([installed, `${origin}/`], 1, relayEnv);
+  await writeFile(discovery, JSON.stringify({ pipe: socketPath, pid: process.pid }));
+  await chmod(socketPath, 0o644);
+  await run([installed, `${origin}/`], 1, relayEnv);
+  await chmod(socketPath, 0o600);
+  const linkedDiscovery = join(home, "discovery-hardlink.json");
+  await link(discovery, linkedDiscovery);
+  await run([installed, `${origin}/`], 1, relayEnv);
+  await rm(linkedDiscovery);
+  const linkedSocket = join(home, "linked.sock");
+  await symlink(socketPath, linkedSocket);
+  await writeFile(discovery, JSON.stringify({ pipe: linkedSocket, pid: process.pid }));
+  await run([installed, `${origin}/`], 1, relayEnv);
+  await rm(linkedSocket);
+  await writeFile(discovery, JSON.stringify({ pipe: socketPath, pid: process.pid }));
   await run([installed, "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"], 1, relayEnv);
+  for (const invalid of [Buffer.alloc(4), Buffer.from([1, 0, 12, 0]), Buffer.from([1, 0, 0, 0, 123])]) {
+    const malformed = Bun.spawn([installed, `${origin}/`], { env: relayEnv, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    malformed.stdin.write(invalid);
+    malformed.stdin.end();
+    const [code, error] = await Promise.all([malformed.exited, new Response(malformed.stderr).text()]);
+    check(code === 1 && error.length > 0, `Malformed native frame returned code ${code} and stderr ${JSON.stringify(error)}`);
+  }
   await run([installed, "--stop"]);
-  check(await helper.exited === 0, "Helper shutdown failed");
 
   const tools = join(data, "app/tools");
   await run([join(tools, "ffmpeg"), "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000", "-t", "6", "-c:v", "libx264", "-c:a", "aac", "-y", media]);
@@ -158,7 +201,31 @@ try {
   const info = join(home, "fixture.json");
   await writeFile(info, JSON.stringify(metadata));
   await cp(join(tools, "yt-dlp"), join(tools, "yt-dlp-pinned"));
-  const wrapper = `#!${process.execPath}\nconst args=process.argv.slice(2);\nif(args.includes("--dump-single-json")){console.log(await Bun.file(${JSON.stringify(info)}).text());}else{const child=Bun.spawn([${JSON.stringify(join(tools, "yt-dlp-pinned"))},...args],{stdin:"ignore",stdout:"inherit",stderr:"inherit"});process.exit(await child.exited);}\n`;
+  const toolPids = join(home, "tool-pids.txt");
+  const activeToolPids = async () => {
+    const pids = (await readFile(toolPids, "utf8")).trim().split("\n").map(Number);
+    check(pids.every((pid) => Number.isInteger(pid) && pid > 1), "Invalid generated tool PID receipt");
+    return pids.filter((pid) => {
+      try { process.kill(pid, 0); return true; } catch (error: any) {
+        if (error.code === "ESRCH") return false;
+        throw error;
+      }
+    });
+  };
+  const wrapper = `#!${process.execPath}
+import { appendFile } from "node:fs/promises";
+const args = process.argv.slice(2);
+await appendFile(${JSON.stringify(toolPids)}, process.pid + "\\n");
+if (args.includes("--dump-single-json")) {
+  console.log(await Bun.file(${JSON.stringify(info)}).text());
+} else {
+  const child = Bun.spawn([${JSON.stringify(join(tools, "yt-dlp-pinned"))}, ...args], {
+    stdin: "ignore", stdout: "inherit", stderr: "inherit",
+  });
+  await appendFile(${JSON.stringify(toolPids)}, child.pid + "\\n");
+  process.exit(await child.exited);
+}
+`;
   await writeFile(join(tools, "yt-dlp"), wrapper, { mode: 0o700 });
   await chmod(join(tools, "yt-dlp"), 0o700);
   const manifestPath = join(tools, "manifest.json");
@@ -167,19 +234,27 @@ try {
   manifest.files["yt-dlp-pinned"] = createHash("sha256").update(await readFile(join(tools, "yt-dlp-pinned"))).digest("hex");
   await writeFile(manifestPath, JSON.stringify(manifest));
   const worker = Bun.spawn([installed, "--run"], { env: environment, stdout: "ignore", stderr: "pipe" });
-  await until(() => api("/health"), (value) => value.tools.status === "ready", "fixture tools");
+  await until(startingHealth, (value) => value?.tools.status === "ready", "fixture tools");
   const input = { url: metadata.webpage_url, cookies: [] };
   await api("/info", input);
   await until(() => api("/info", input), (value) => value.status === "ready", "source metadata");
-  for (const format of ["mp4", "mp3"]) {
+  const published = new Map<string, string>();
+  for (const format of ["mp4", "mp3", "mp4"]) {
     const job = await api("/jobs", { ...input, format, start: 1, end: 4 });
     const done = await until(() => api("/jobs"), (value) => value.jobs.some((item: any) => item.id === job.id && ["completed", "failed", "canceled"].includes(item.status)), "generated download");
     const result = done.jobs.find((item: any) => item.id === job.id);
     check(result.status === "completed", `Generated ${format} failed: ${result.error}`);
     const output = join(desktop, result.filename);
+    await api(`/jobs/${job.id}/reveal`, {});
+    await until(async () => fileManager!.uris, (uris) => uris.some((uri) => decodeURIComponent(new URL(uri).pathname) === output), "native file manager request");
     await run([join(tools, "ffmpeg"), "-hide_banner", "-loglevel", "error", "-i", output, "-f", "null", "-"]);
     const probe = JSON.parse(await run([join(tools, "ffprobe"), "-v", "error", "-show_entries", "format=duration", "-of", "json", output]));
     check(Math.abs(Number(probe.format.duration) - 3) < 0.2, "Trimmed output duration changed");
+    check(!published.has(output), "A repeated download overwrote an existing file");
+    for (const [existing, hash] of published) {
+      check(createHash("sha256").update(await readFile(existing)).digest("hex") === hash, "A previous output changed during a repeated download");
+    }
+    published.set(output, createHash("sha256").update(await readFile(output)).digest("hex"));
   }
   slow = true;
   const canceled = await api("/jobs", { ...input, format: "mp4", start: 0, end: null });
@@ -188,6 +263,7 @@ try {
   const jobs = await until(() => api("/jobs"), (value) => value.jobs.some((item: any) => item.id === canceled.id && ["canceled", "failed"].includes(item.status)), "download cancellation");
   check(jobs.jobs.find((item: any) => item.id === canceled.id).status === "canceled", "Cancellation failed");
   check(!(await readdir(join(data, "temp"))).includes(canceled.id), "Canceled download left temporary payload");
+  await until(activeToolPids, (pids) => pids.length === 0, "owned tool process cleanup");
   await until(async () => activeTransfers, (value) => value === 0, "canceled transfer closure");
   const stopped = await api("/jobs", { ...input, format: "mp4", start: 0, end: null });
   await until(async () => activeTransfers, (value) => value > 0, "transfer before shutdown");
@@ -196,7 +272,9 @@ try {
   const saved = await Bun.file(join(data, "jobs.json")).json();
   check(saved.find((item: any) => item.id === stopped.id).status === "canceled", "Shutdown did not persist cancellation");
   check(!(await readdir(join(data, "temp"))).includes(stopped.id), "Shutdown left temporary payload");
+  await until(activeToolPids, (pids) => pids.length === 0, "owned tool cleanup after shutdown");
   const payloads = await readdir(desktop);
+  await rm(join(tools, "yt-dlp-pinned"));
   await run([source, "--install"]);
   check((await readdir(desktop)).length === payloads.length, "Reinstall changed downloaded payload");
   await run([installed, "--uninstall"]);
@@ -212,6 +290,7 @@ try {
   }
   if (broker.listening) broker.close();
   server.stop(true);
+  fileManager?.close();
   if (!stopped) throw new Error(`Could not stop the isolated helper. Diagnostics retained: ${home}`);
   await rm(home, { recursive: true, force: true });
 }

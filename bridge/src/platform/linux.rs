@@ -178,7 +178,7 @@ impl Control {
         private_directory(home)?;
         unsafe {
             let mut action: libc::sigaction = std::mem::zeroed();
-            action.sa_sigaction = shutdown_signal as usize;
+            action.sa_sigaction = shutdown_signal as *const () as usize;
             libc::sigemptyset(&mut action.sa_mask);
             ensure!(
                 libc::sigaction(libc::SIGTERM, &action, std::ptr::null_mut()) == 0

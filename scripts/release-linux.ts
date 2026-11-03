@@ -65,7 +65,21 @@ await Bun.write(join(tools, "manifest.json"), JSON.stringify({ version: "2026.10
 for (const name of ["LICENSE", "LICENSE.MIT", "LICENSE.GPL-2.0", "THIRD_PARTY_NOTICES.md", "upstream-lock.json"]) {
   await cp(join(root, name), join(bundle, name));
 }
+const setupTemplate = await Bun.file(join(root, "scripts/setup.html")).text();
+const setup = setupTemplate.replace('data-platform="windows-x64"', 'data-platform="linux-x64"');
+if (setup === setupTemplate) throw new Error("The setup page has no build platform marker.");
+await Bun.write(join(bundle, "setup.html"), setup);
 await copyNativeLicenses(join(bundle, "licenses"));
+const revision = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: root });
+const status = Bun.spawnSync(["git", "status", "--porcelain"], { cwd: root });
+if (revision.exitCode !== 0 || status.exitCode !== 0) throw new Error("Cannot identify the qcatch source revision.");
+const sourceRevision = revision.stdout.toString().trim();
+if (!/^[0-9a-f]{40}$/.test(sourceRevision)) throw new Error("Invalid qcatch source revision.");
+const identity = {
+  product: "qcatch", version, protocolVersion: 1, platform: "linux-x64",
+  sourceRevision, sourceWorktreeChanged: status.stdout.length > 0,
+};
+await Bun.write(join(bundle, "build-manifest.json"), JSON.stringify(identity, null, 2) + "\n");
 const inventory: Record<string, string> = {};
 for (const path of await files(bundle)) inventory[relative(bundle, path)] = digest(await Bun.file(path).bytes());
 await Bun.write(join(bundle, "bundle.json"), JSON.stringify({ product: "qcatch", version, protocolVersion: 1, files: inventory }, null, 2) + "\n");
@@ -84,12 +98,8 @@ const assets = await Promise.all([portable, `qcatch-${version}-extension.zip`, s
   const bytes = await Bun.file(join(artifacts, name)).bytes();
   return { name, size: bytes.length, sha256: digest(bytes) };
 }));
-const revision = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: root });
-const status = Bun.spawnSync(["git", "status", "--porcelain"], { cwd: root });
 await Bun.write(join(artifacts, "release-manifest-linux.json"), JSON.stringify({
-  product: "qcatch", version, protocolVersion: 1, platform: "linux-x64",
-  sourceRevision: revision.exitCode === 0 ? revision.stdout.toString().trim() : null,
-  sourceWorktreeChanged: status.stdout.length > 0,
+  ...identity,
   extensionId: (await Bun.file(join(root, "release/extension-id.txt")).text()).trim(),
   nativeHost: "org.qbutt.qcatch", assets, userReleaseAssets: [portable],
   sourceRelease: { tag: `v${version}-sources`, assets: [sourceAsset] },

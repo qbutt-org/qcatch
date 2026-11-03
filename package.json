@@ -13,6 +13,7 @@
     "icons": "bun run scripts/icons.ts",
     "integration:product-actions": "bun run scripts/integration-product-actions.ts",
     "integration:linux": "bun run scripts/integration-linux.ts",
+    "integration:linux-update": "bun run scripts/integration-linux-update.ts",
     "integration:vk-resolve": "bun run scripts/integration-vk-resolve.ts",
     "package": "bun run scripts/package.ts",
     "release:build": "bun run scripts/release.ts",

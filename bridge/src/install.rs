@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, HashSet},
     env, fs,
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     os::unix::fs::{MetadataExt, PermissionsExt, symlink},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
@@ -80,7 +80,7 @@ fn relative(value: &str) -> Result<&Path> {
 fn manifest(directory: &Path) -> Result<Bundle> {
     let metadata = fs::symlink_metadata(directory.join("bundle.json"))?;
     ensure!(
-        metadata.is_file() && !metadata.is_symlink() && metadata.len() <= 4 * 1024 * 1024,
+        metadata.is_file() && metadata.nlink() == 1 && metadata.len() <= 4 * 1024 * 1024,
         "Invalid qcatch bundle manifest"
     );
     let bundle: Bundle = serde_json::from_slice(&fs::read(directory.join("bundle.json"))?)?;
@@ -99,15 +99,9 @@ fn manifest(directory: &Path) -> Result<Bundle> {
 
 fn bundle(directory: &Path) -> Result<Bundle> {
     let bundle = manifest(directory)?;
+    owned_directory(directory, &bundle)?;
     for (name, digest) in &bundle.files {
-        let mut path = directory.to_path_buf();
-        for part in relative(name)?.components() {
-            path.push(part);
-            ensure!(
-                !fs::symlink_metadata(&path)?.is_symlink(),
-                "Symlink in qcatch bundle"
-            );
-        }
+        let path = directory.join(relative(name)?);
         let metadata = fs::metadata(&path)?;
         ensure!(
             metadata.is_file() && metadata.nlink() == 1 && metadata.len() <= 512 * 1024 * 1024,
@@ -129,6 +123,43 @@ fn bundle(directory: &Path) -> Result<Bundle> {
         );
     }
     Ok(bundle)
+}
+
+fn owned_directory(directory: &Path, bundle: &Bundle) -> Result<()> {
+    let mut expected = HashSet::new();
+    for name in bundle
+        .files
+        .keys()
+        .map(String::as_str)
+        .chain(["bundle.json"])
+    {
+        let path = relative(name)?;
+        for ancestor in path
+            .ancestors()
+            .take_while(|path| !path.as_os_str().is_empty())
+        {
+            expected.insert(ancestor.to_path_buf());
+        }
+    }
+    let mut pending = vec![directory.to_path_buf()];
+    while let Some(parent) = pending.pop() {
+        for entry in fs::read_dir(parent)? {
+            let path = entry?.path();
+            let relative = path.strip_prefix(directory)?;
+            ensure!(expected.remove(relative), "Unowned file in qcatch bundle");
+            let metadata = fs::symlink_metadata(&path)?;
+            if metadata.is_dir() {
+                pending.push(path);
+            } else {
+                ensure!(
+                    metadata.is_file() && metadata.nlink() == 1,
+                    "Invalid qcatch bundle file"
+                );
+            }
+        }
+    }
+    ensure!(expected.is_empty(), "Incomplete qcatch bundle");
+    Ok(())
 }
 
 fn launcher() -> Result<PathBuf> {
@@ -164,6 +195,7 @@ fn install(source: &Path) -> Result<()> {
     if destination.try_exists()? {
         platform::check_private(&destination, true)?;
         let existing = manifest(&destination)?;
+        owned_directory(&destination, &existing)?;
         ensure!(
             version(&existing.version).context("Invalid installed version")?
                 <= version(&candidate.version).context("Invalid bundle version")?,
@@ -263,7 +295,8 @@ fn uninstall() -> Result<()> {
     let home = platform::data_home()?;
     let directory = home.join("app");
     platform::check_private(&directory, true)?;
-    manifest(&directory)?;
+    let existing = manifest(&directory)?;
+    owned_directory(&directory, &existing)?;
     let executable = directory.join("qcatch");
     let control = platform::Control::new(&home)?;
     let _lock = control.stop()?;
@@ -301,8 +334,36 @@ fn apply_update(archive: &Path) -> Result<()> {
     let staging = updates.join(format!(".extract-{}", uuid::Uuid::new_v4()));
     platform::private_directory(&staging)?;
     let result = (|| -> Result<()> {
-        let mut archive = zip::ZipArchive::new(fs::File::open(archive)?)?;
-        ensure!(archive.len() <= 20000, "Update contains too many files");
+        let file = fs::File::open(archive)?;
+        let mut footer_file = file.try_clone()?;
+        let mut archive = zip::ZipArchive::new(file)?;
+        // Our bounded release archives are single-disk ZIP32. ZipArchive hides
+        // duplicate central names, so check its count against the original footer.
+        let footer_offset =
+            footer_file.seek(SeekFrom::End(-22 - archive.comment().len() as i64))?;
+        let mut footer = [0; 22];
+        footer_file.read_exact(&mut footer)?;
+        let entries = u16::from_le_bytes([footer[10], footer[11]]) as usize;
+        ensure!(
+            footer[..4] == [0x50, 0x4b, 0x05, 0x06]
+                && footer[4..8] == [0; 4]
+                && footer[8..10] == footer[10..12]
+                && footer[12..16] != [0xff; 4]
+                && footer[16..20] != [0xff; 4]
+                && entries > 0
+                && entries <= 20000,
+            "Invalid or unsupported update ZIP metadata"
+        );
+        if footer_offset >= 20 {
+            footer_file.seek(SeekFrom::Start(footer_offset - 20))?;
+            let mut signature = [0; 4];
+            footer_file.read_exact(&mut signature)?;
+            ensure!(
+                signature != [0x50, 0x4b, 0x06, 0x07],
+                "ZIP64 update archives are unsupported"
+            );
+        }
+        ensure!(entries == archive.len(), "Duplicate update path");
         let mut names = HashSet::new();
         let mut total = 0u64;
         for index in 0..archive.len() {

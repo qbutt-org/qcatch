@@ -15,7 +15,7 @@ struct GError {
 #[link(name = "gio-2.0")]
 unsafe extern "C" {
     fn g_app_info_get_default_for_uri_scheme(scheme: *const c_char) -> *mut c_void;
-    fn g_app_info_get_executable(application: *mut c_void) -> *const c_char;
+    fn g_app_info_get_commandline(application: *mut c_void) -> *const c_char;
     fn g_bus_get_sync(
         kind: c_int,
         cancellable: *mut c_void,
@@ -41,22 +41,41 @@ pub fn default_browser_executable() -> Option<std::path::PathBuf> {
     if application.is_null() {
         return None;
     }
-    let executable = unsafe { g_app_info_get_executable(application) };
-    let path = if executable.is_null() {
-        None
-    } else {
+    // Parse the desktop command line so quoted executable paths stay intact.
+    let command = unsafe { g_app_info_get_commandline(application) };
+    let mut count = 0;
+    let mut arguments = ptr::null_mut();
+    let mut error = ptr::null_mut();
+    let parsed = !command.is_null()
+        && unsafe { g_shell_parse_argv(command, &mut count, &mut arguments, &mut error) } != 0;
+    let path = if parsed && count > 0 {
         Some(std::path::PathBuf::from(
-            unsafe { CStr::from_ptr(executable) }
+            unsafe { CStr::from_ptr(*arguments) }
                 .to_string_lossy()
                 .as_ref(),
         ))
+    } else {
+        None
     };
+    if !arguments.is_null() {
+        unsafe { g_strfreev(arguments) };
+    }
+    if !error.is_null() {
+        unsafe { g_error_free(error) };
+    }
     unsafe { g_object_unref(application) };
     path
 }
 
 #[link(name = "glib-2.0")]
 unsafe extern "C" {
+    fn g_shell_parse_argv(
+        command: *const c_char,
+        count: *mut c_int,
+        arguments: *mut *mut *mut c_char,
+        error: *mut *mut GError,
+    ) -> c_int;
+    fn g_strfreev(strings: *mut *mut c_char);
     fn g_variant_new(format: *const c_char, ...) -> *mut c_void;
     fn g_variant_unref(variant: *mut c_void);
     fn g_error_free(error: *mut GError);

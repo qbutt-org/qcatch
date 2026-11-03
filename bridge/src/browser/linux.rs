@@ -38,8 +38,10 @@ pub fn connect(browser: &str) -> Result<()> {
             &[
                 "google-chrome",
                 "google-chrome-stable",
+                "google-chrome-for-testing",
                 "chromium",
                 "chromium-browser",
+                "chrome",
             ],
         ),
         _ => anyhow::bail!("Choose Microsoft Edge, Google Chrome or Chromium"),
@@ -82,15 +84,20 @@ pub fn connect(browser: &str) -> Result<()> {
 
 fn manifests() -> Result<Vec<PathBuf>> {
     let config = platform::xdg_directory("XDG_CONFIG_HOME", ".config")?;
-    Ok(["google-chrome", "chromium", "microsoft-edge"]
-        .iter()
-        .map(|browser| {
-            config
-                .join(browser)
-                .join("NativeMessagingHosts")
-                .join(format!("{NATIVE_HOST}.json"))
-        })
-        .collect())
+    Ok([
+        "google-chrome",
+        "google-chrome-for-testing",
+        "chromium",
+        "microsoft-edge",
+    ]
+    .iter()
+    .map(|browser| {
+        config
+            .join(browser)
+            .join("NativeMessagingHosts")
+            .join(format!("{NATIVE_HOST}.json"))
+    })
+    .collect())
 }
 
 pub fn register() -> Result<()> {
