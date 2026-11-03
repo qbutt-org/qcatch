@@ -42,9 +42,9 @@ For the portable version, extract `qcatch-portable.zip`.
 
 ### Linux
 
-Linux x64 builds target Ubuntu 24.04 or later with glibc 2.39+. See [Development](#development) for building the bundle from source.
+Linux x64 requires Ubuntu 24.04 or later with glibc 2.39+. Download [qcatch-linux-x64.zip](https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-linux-x64.zip) and extract the archive.
 
-Extract the built `qcatch-linux-x64.zip` and run `./qcatch --install` in its directory. Per-user installation registers the native host and starts the helper. To connect Chrome or Chromium, run `~/.local/bin/qcatch --connect-browser chrome`; for Edge, replace `chrome` with `edge`.
+Run `./qcatch --install` in the extracted directory. Per-user installation registers the native host and starts the helper. To connect Chrome or Chromium, run `~/.local/bin/qcatch --connect-browser chrome`; for Edge, replace `chrome` with `edge`.
 
 The command opens the extensions page and returns `extensionDirectory`, the path to the installed extension. Use that path instead of the extracted ZIP directory. To update, run `./qcatch --install` from the new bundle. `~/.local/bin/qcatch --uninstall` preserves the queue and downloaded files.
 

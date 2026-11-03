@@ -42,9 +42,9 @@
 
 ### Linux
 
-Linux x64 собирается для Ubuntu 24.04 и новее с glibc 2.39+. Как собрать пакет, описано в разделе [Разработка](#разработка).
+Для Linux x64 нужны Ubuntu 24.04 или новее и glibc 2.39+. Скачайте [qcatch-linux-x64.zip](https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-linux-x64.zip) и распакуйте архив.
 
-Распакуйте собранный `qcatch-linux-x64.zip` и выполните `./qcatch --install` в его папке. Установка текущему пользователю регистрирует native host и запускает помощник. Для подключения Chrome или Chromium выполните `~/.local/bin/qcatch --connect-browser chrome`; для Edge замените `chrome` на `edge`.
+В распакованной папке выполните `./qcatch --install`. Установка текущему пользователю регистрирует native host и запускает помощник. Для подключения Chrome или Chromium выполните `~/.local/bin/qcatch --connect-browser chrome`; для Edge замените `chrome` на `edge`.
 
 Команда откроет страницу расширений и вернёт `extensionDirectory` — путь к установленной копии расширения. Используйте этот путь, а не папку из распакованного ZIP. Для обновления повторите `./qcatch --install` из нового пакета. Удаление через `~/.local/bin/qcatch --uninstall` сохраняет очередь и скачанные файлы.
 
