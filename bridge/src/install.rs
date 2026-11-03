@@ -273,12 +273,7 @@ fn install(source: &Path) -> Result<()> {
         }
         control.reset()?;
         drop(_lock);
-        Command::new(&executable)
-            .arg("--run")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?;
+        start(&executable, &home, &control)?;
         println!(
             "{}",
             serde_json::json!({"installed":true,"version":candidate.version,"executable":executable})
@@ -287,6 +282,66 @@ fn install(source: &Path) -> Result<()> {
     })();
     if staging.try_exists()? {
         fs::remove_dir_all(staging)?;
+    }
+    result
+}
+
+fn start(executable: &Path, home: &Path, control: &platform::Control) -> Result<()> {
+    let log = home.join("bridge.log");
+    let log_offset = fs::symlink_metadata(&log).map_or(0, |metadata| metadata.len());
+    let mut child = Command::new(executable)
+        .arg("--run")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let started = Instant::now();
+    let result = (|| -> Result<()> {
+        loop {
+            if let Some(status) = child.try_wait()? {
+                let mut detail = String::new();
+                if let Ok(metadata) = platform::check_private(&log, false)
+                    && metadata.is_file()
+                    && metadata.len() <= 1024 * 1024
+                    && let Ok(bytes) = fs::read(&log)
+                {
+                    let offset = if log_offset <= bytes.len() as u64 {
+                        log_offset as usize
+                    } else {
+                        0
+                    };
+                    detail = String::from_utf8_lossy(&bytes[offset..]).trim().to_owned();
+                }
+                anyhow::bail!(
+                    "qcatch exited before startup ({status}){}",
+                    if detail.is_empty() {
+                        detail
+                    } else {
+                        format!(": {detail}")
+                    }
+                );
+            }
+            ensure!(!control.stopping(0)?, "qcatch startup canceled");
+            if control.is_ready(child.id())? {
+                return Ok(());
+            }
+            ensure!(
+                started.elapsed() < Duration::from_secs(15),
+                "qcatch startup did not become ready within 15 seconds"
+            );
+            thread::sleep(Duration::from_millis(25));
+        }
+    })();
+    if result.is_err() {
+        let cleanup = (|| -> std::io::Result<()> {
+            if child.try_wait()?.is_none() {
+                child.kill()?;
+            }
+            child.wait().map(|_| ())
+        })();
+        if let Err(error) = cleanup {
+            return result.context(format!("Could not drain qcatch startup child: {error}"));
+        }
     }
     result
 }

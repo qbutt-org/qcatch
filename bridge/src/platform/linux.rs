@@ -3,7 +3,7 @@ use std::{
     os::{
         fd::AsRawFd,
         unix::{
-            fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+            fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt, PermissionsExt},
             process::CommandExt,
         },
     },
@@ -242,12 +242,29 @@ impl Control {
     }
 
     pub fn reset(&self) -> Result<()> {
+        self.lock.set_len(0)?;
         match fs::remove_file(&self.stop) {
             Ok(()) => (),
             Err(e) if e.kind() == io::ErrorKind::NotFound => (),
             Err(e) => return Err(e.into()),
         }
         Ok(())
+    }
+
+    pub fn mark_ready(&self) -> Result<()> {
+        self.lock
+            .write_all_at(format!("{}\n", std::process::id()).as_bytes(), 0)?;
+        Ok(())
+    }
+
+    pub fn is_ready(&self, pid: u32) -> Result<bool> {
+        let mut record = [0; 32];
+        let count = self.lock.read_at(&mut record, 0)?;
+        let expected = format!("{pid}\n");
+        if &record[..count] != expected.as_bytes() {
+            return Ok(false);
+        }
+        Ok(self.lock(0)?.is_none())
     }
 
     pub fn stopping(&self, timeout: u32) -> Result<bool> {

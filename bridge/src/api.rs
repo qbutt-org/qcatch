@@ -146,6 +146,8 @@ pub fn serve(
     );
     let mut next_update = Instant::now();
     let mut info_tasks = InfoTasks::default();
+    #[cfg(target_os = "linux")]
+    control.mark_ready()?;
     while !control.stopping(0)? {
         {
             let mut data = state.lock().unwrap();
