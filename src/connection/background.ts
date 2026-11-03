@@ -153,16 +153,20 @@ async function browserFetch(command: BrowserCommand, signal: AbortSignal) {
 }
 
 async function loaded(tabId: number, signal: AbortSignal): Promise<void> {
-    for (let attempt = 0; attempt < 80; attempt++) {
+    for (;;) {
         signal.throwIfAborted();
-        if ((await chrome.tabs.get(tabId)).status === "complete") return;
+        if ((await abortable(chrome.tabs.get(tabId), signal)).status === "complete") return;
         // A source page may keep an advertising frame loading indefinitely.
         // Its own DOM is sufficient for ordinary document navigation.
-        try { if ((await commandTab(tabId, { type: "ready" }))?.ready) return; }
-        catch { /* The new document has not received its content script yet. */ }
+        try {
+            const state = await abortable(commandTab(tabId, { type: "ready" }), signal);
+            if (state?.ready) return;
+        } catch {
+            // The new document may not have received its content script yet.
+            signal.throwIfAborted();
+        }
         await delay(100, signal);
     }
-    throw new Error("Плеер не загрузился.");
 }
 
 async function commandTab(tabId: number, message: unknown, frameId = 0): Promise<any> {
@@ -260,13 +264,14 @@ async function mountFrame(probe: Probe, url: string, sourceUrl: string): Promise
     // Authorize only the requested child before document_start. Its initial
     // manifest request may finish before the player's DOM is ready.
     probe.ready = true;
-    const mounted = await commandTab(probe.tabId, { type: "frame:mount", url });
+    const mounted = await abortable(commandTab(probe.tabId, { type: "frame:mount", url }), probe.controller.signal);
     if (mounted?.error) throw new SourceError(mounted.code, mounted.error, sourceUrl);
-    for (let attempt = 0; attempt < 80; attempt++) {
+    for (;;) {
         probe.controller.signal.throwIfAborted();
         if (probe.selected.id !== undefined) {
-            const state = await commandFrame(probe, { type: "ready" }).catch((error) => {
+            const state = await abortable(commandFrame(probe, { type: "ready" }), probe.controller.signal).catch((error) => {
                 if (error instanceof SourceError) throw error;
+                probe.controller.signal.throwIfAborted();
                 return undefined;
             });
             if (state?.url && state.url !== url) throw new SourceError("selected_content_changed", "Источник перенаправил выбранный плеер на другую страницу.", sourceUrl);
@@ -277,21 +282,17 @@ async function mountFrame(probe: Probe, url: string, sourceUrl: string): Promise
         }
         await delay(100, probe.controller.signal);
     }
-    throw new SourceError("selection_unavailable", "Выбранный плеер не загрузился в источнике.", sourceUrl);
 }
 
 async function navigateFromPage(probe: Probe, url: string, sourceUrl: string): Promise<void> {
-    const previousUrl = (await chrome.tabs.get(probe.tabId)).url;
+    const previousUrl = (await abortable(chrome.tabs.get(probe.tabId), probe.controller.signal)).url;
     probe.page.url = url;
     delete probe.page.status;
-    const navigation = await commandTab(probe.tabId, { type: "navigate", url });
+    const navigation = await abortable(commandTab(probe.tabId, { type: "navigate", url }), probe.controller.signal);
     if (navigation?.error) throw new SourceError(navigation.code, navigation.error, sourceUrl);
-    let navigated = false;
-    for (let attempt = 0; attempt < 80; attempt++) {
-        if ((await chrome.tabs.get(probe.tabId)).url !== previousUrl) { navigated = true; break; }
+    while ((await abortable(chrome.tabs.get(probe.tabId), probe.controller.signal)).url === previousUrl) {
         await delay(100, probe.controller.signal);
     }
-    if (!navigated) throw new SourceError("selection_unavailable", "Источник не открыл выбранный плеер.", sourceUrl);
     await loaded(probe.tabId, probe.controller.signal);
     await confirmSelection(probe, sourceUrl);
 }
