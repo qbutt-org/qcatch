@@ -42,11 +42,17 @@
 
 ### Linux
 
-Для Linux x64 нужны Ubuntu 24.04 или новее и glibc 2.39+. Скачайте [qcatch-linux-x64.zip](https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-linux-x64.zip) и распакуйте архив.
+Для Linux x64 нужны Ubuntu 24.04 или новее и glibc 2.39+. Выполните в терминале Linux или WSL:
 
-В распакованной папке выполните `./qcatch --install`. Установка текущему пользователю регистрирует native host и запускает помощник. Для подключения Chrome или Chromium выполните `~/.local/bin/qcatch --connect-browser chrome`; для Edge замените `chrome` на `edge`.
+```sh
+curl -fsSL https://qbutt-org.github.io/qbutt/install.sh | sh -s -- qcatch
+```
 
-Команда откроет страницу расширений и вернёт `extensionDirectory` — путь к установленной копии расширения. Используйте этот путь, а не папку из распакованного ZIP. Для обновления повторите `./qcatch --install` из нового пакета. Удаление через `~/.local/bin/qcatch --uninstall` сохраняет очередь и скачанные файлы.
+Команда устанавливает qcatch текущему пользователю и запускает приложение. Для подключения Chrome или Chromium выполните `~/.local/bin/qcatch --connect-browser chrome`; для Edge замените `chrome` на `edge`.
+
+Команда откроет страницу расширений и вернёт `extensionDirectory` — путь к установленной копии расширения. Используйте этот путь, а не папку из распакованного архива. Для обновления повторите команду установки. Удаление через `~/.local/bin/qcatch --uninstall` сохраняет очередь и скачанные файлы.
+
+Для ручной установки скачайте [qcatch-linux-x64.tar.gz](https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-linux-x64.tar.gz), распакуйте и выполните `./qcatch --install`.
 
 ### Подключение расширения
 

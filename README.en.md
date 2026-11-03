@@ -42,11 +42,17 @@ For the portable version, extract `qcatch-portable.zip`.
 
 ### Linux
 
-Linux x64 requires Ubuntu 24.04 or later with glibc 2.39+. Download [qcatch-linux-x64.zip](https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-linux-x64.zip) and extract the archive.
+Linux x64 requires Ubuntu 24.04 or later with glibc 2.39+. Run this in a Linux or WSL terminal:
 
-Run `./qcatch --install` in the extracted directory. Per-user installation registers the native host and starts the helper. To connect Chrome or Chromium, run `~/.local/bin/qcatch --connect-browser chrome`; for Edge, replace `chrome` with `edge`.
+```sh
+curl -fsSL https://qbutt-org.github.io/qbutt/install.sh | sh -s -- qcatch
+```
 
-The command opens the extensions page and returns `extensionDirectory`, the path to the installed extension. Use that path instead of the extracted ZIP directory. To update, run `./qcatch --install` from the new bundle. `~/.local/bin/qcatch --uninstall` preserves the queue and downloaded files.
+The command installs qcatch for the current user and starts the app. To connect Chrome or Chromium, run `~/.local/bin/qcatch --connect-browser chrome`; for Edge, replace `chrome` with `edge`.
+
+The command opens the extensions page and returns `extensionDirectory`, the path to the installed extension. Use that path instead of the extracted archive directory. To update, repeat the installation command. `~/.local/bin/qcatch --uninstall` preserves the queue and downloaded files.
+
+For manual installation, download [qcatch-linux-x64.tar.gz](https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-linux-x64.tar.gz), extract it, and run `./qcatch --install`.
 
 ### Connect the extension
 
