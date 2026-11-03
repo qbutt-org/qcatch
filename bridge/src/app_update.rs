@@ -205,8 +205,8 @@ async fn prepare_update(
     let client = Client::builder()
         .user_agent(concat!("qcatch/", env!("CARGO_PKG_VERSION")))
         .https_only(true)
-        .connect_timeout(Duration::from_secs(5))
-        .read_timeout(Duration::from_secs(5))
+        .connect_timeout(Duration::from_secs(10))
+        .read_timeout(Duration::from_secs(30))
         .timeout(Duration::from_secs(600))
         .build()?;
     let mut response = client
