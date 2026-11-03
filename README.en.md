@@ -34,19 +34,31 @@
 
 ## Installation
 
+### Windows
+
 Run **qcatch-setup.exe**. After installation, setup instructions open.
+
+For the portable version, extract `qcatch-portable.zip`.
+
+### Linux
+
+Linux x64 builds target Ubuntu 24.04 or later with glibc 2.39+. See [Development](#development) for building the bundle from source.
+
+Extract the built `qcatch-linux-x64.zip` and run `./qcatch --install` in its directory. Per-user installation registers the native host and starts the helper. To connect Chrome or Chromium, run `~/.local/bin/qcatch --connect-browser chrome`; for Edge, replace `chrome` with `edge`.
+
+The command opens the extensions page and returns `extensionDirectory`, the path to the installed extension. Use that path instead of the extracted ZIP directory. To update, run `./qcatch --install` from the new bundle. `~/.local/bin/qcatch --uninstall` preserves the queue and downloaded files.
+
+### Connect the extension
 
 The extension currently requires manual installation because there is no published store listing:
 
-1. Open `edge://extensions` in Microsoft Edge or `chrome://extensions` in Google Chrome.
+1. Open `edge://extensions` in Microsoft Edge or `chrome://extensions` in Google Chrome or Chromium.
 2. Enable **Developer mode** and click **Load unpacked**.
 3. Select the extension folder shown in the instructions.
 
 Once connected, pin the qcatch icon to the browser toolbar. If the source page was already open before installation, refresh it.
 
-The release page also offers a portable version.
-
-The installed version updates in the background when current actions finish and the extension popup is closed. The extension reloads automatically when loaded from the installed folder. The portable version is updated manually.
+On Windows, the installed version updates in the background when current actions finish and the extension popup is closed. The extension reloads automatically when loaded from the installed folder. The portable version is updated manually.
 
 ## Download video
 
@@ -58,9 +70,9 @@ See [stream detection and site notes](docs/SUPPORTED-SITES.md). DRM-protected vi
 
 ## Watch in qplay
 
-Open in qplay sends the selected video to the installed [qplay](https://github.com/qbutt-org/qplay). If the player is missing, qcatch offers to install it.
+Open in qplay sends the selected video to the installed [qplay](https://github.com/qbutt-org/qplay). If the player is missing, qcatch offers to download it.
 
-With [qbutt](https://github.com/qbutt-org/qbutt) installed, Watch in qbutt and Download with qbutt are available. They send the selected media and browser session; the regular Download video button saves through qcatch. If qbutt is missing, qcatch links to its website for installation. qbutt also offers to install qcatch from its interface.
+With [qbutt](https://github.com/qbutt-org/qbutt) installed, Watch in qbutt and Download with qbutt are available. They send the selected media and browser session; the regular Download video button saves through qcatch. If qbutt is missing, qcatch offers its download. qbutt also offers to install qcatch from its interface.
 
 ## Data and permissions
 
@@ -70,17 +82,18 @@ Do not include temporary URLs or authentication data in public bug reports. See 
 
 ## Development
 
-Bun is required; the Windows helper also requires Rust and Visual Studio Build Tools with the Windows SDK.
+Bun and Rust are required. Windows also needs Visual Studio Build Tools with the Windows SDK; Linux needs the system C/C++ toolchain.
 
 ```powershell
 bun install --frozen-lockfile
 bun run check
 bun run bridge:build
-bun run release:build -- v1.2.6
 ```
+
+`scripts/release.ts` builds the Windows installer and portable ZIP; `scripts/release-linux.ts` builds `qcatch-linux-x64.zip`. Linux packaging uses verified qplay tools from `QCATCH_LINUX_TOOLS`, including `sources.json`. The release script requires a tag matching the version in `package.json`.
 
 See the [architecture](docs/ARCHITECTURE.md) and [project rules](AGENTS.md).
 
 ## License
 
-qcatch is distributed under [AGPL-3.0-or-later](LICENSE). Third-party licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). qcatch source is available from the [v1.2.6 tag](https://github.com/qbutt-org/qcatch/tree/v1.2.6); exact dependency sources are available in a separate [technical archive](https://github.com/qbutt-org/qcatch/releases/download/v1.2.6-sources/qcatch-1.2.6-runtime-sources.zip).
+qcatch is distributed under [AGPL-3.0-or-later](LICENSE). Third-party licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). qcatch source is available from the corresponding release tag; exact dependency sources are provided in a separate technical release linked from the product release description.
