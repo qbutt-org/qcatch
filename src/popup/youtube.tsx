@@ -4,6 +4,7 @@ import type { NativeHealth, NativeJob } from "../shared/native.ts";
 import { useEffect, useState } from "preact/hooks";
 import { ProductActions } from "./products.tsx";
 import { ErrorNotice, Header, useLanguage } from "./language.tsx";
+import { downloadProduct } from "./product-download.ts";
 import type {
   YoutubeInfoState,
   YoutubeMessage,
@@ -52,7 +53,7 @@ export function YoutubePanel({
   url: string;
   music: boolean;
 }) {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const [health, setHealth] = useState<NativeHealth>();
   const [connectionError, setConnectionError] = useState<string>();
   const [video, setVideo] = useState<YoutubeInfoState>({ status: "loading" });
@@ -308,15 +309,11 @@ export function YoutubePanel({
       {connectionError ? (
         <section class="empty-state youtube-setup">
           <h1>{t("Нужно приложение на компьютере")}</h1>
-          <p>{t("Установите или запустите qcatch для Windows.")}</p>
+          <p>{t("Установите или запустите qcatch.")}</p>
           <button
             class="primary"
             type="button"
-            onClick={() =>
-              void chrome.tabs.create({
-                url: "https://github.com/qbutt-org/qcatch/releases/latest/download/qcatch-setup.exe",
-              })
-            }
+            onClick={() => void downloadProduct("qcatch", language)}
           >
             {t("Скачать приложение")}
           </button>

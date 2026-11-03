@@ -3,6 +3,7 @@ import type { NativeHealth } from "../shared/native.ts";
 import { NATIVE_BRIDGE_PROTOCOL } from "../shared/native.ts";
 import { productActionKey, type ProductAction, type ProductActionKind } from "../shared/integration.ts";
 import { ErrorNotice, useLanguage } from "./language.tsx";
+import { downloadProduct } from "./product-download.ts";
 
 export function ProductActions(props: {
   tabId: number;
@@ -12,7 +13,7 @@ export function ProductActions(props: {
   subtitleIds?: string[];
   youtube?: boolean;
 }) {
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const [health, setHealth] = useState<NativeHealth>();
   const [checking, setChecking] = useState(true);
   const [refresh, setRefresh] = useState(0);
@@ -112,14 +113,6 @@ export function ProductActions(props: {
     });
   };
 
-  const install = (product: "qplay" | "qcatch" | "qbutt") => {
-    void chrome.tabs.create({
-      url: product === "qbutt"
-        ? "https://qbutt-org.github.io/qbutt/"
-        : `https://github.com/qbutt-org/${product}/releases/latest/download/${product}-setup.exe`,
-    });
-  };
-
   return (
     <>
       <div class="product-actions">
@@ -146,8 +139,11 @@ export function ProductActions(props: {
           </button>
         )}
         {!checking && !health?.qplayInstalled && (
-          <button type="button" onClick={() => install(health ? "qplay" : "qcatch")}>
-            {t(health ? "Установить qplay" : "Установить qcatch для Windows")}
+          <button
+            type="button"
+            onClick={() => void downloadProduct(health ? "qplay" : "qcatch", language)}
+          >
+            {t(health ? "Скачать qplay" : "Скачать qcatch")}
           </button>
         )}
         {!props.youtube && health?.qbuttInstalled && (
@@ -161,7 +157,9 @@ export function ProductActions(props: {
           </div>
         )}
         {!props.youtube && health && !health.qbuttInstalled && (
-          <button type="button" onClick={() => install("qbutt")}>{t("Установить qbutt")}</button>
+          <button type="button" onClick={() => void downloadProduct("qbutt", language)}>
+            {t("Скачать qbutt")}
+          </button>
         )}
       </div>
       {pending && (

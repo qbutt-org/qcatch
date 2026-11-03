@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-platform="windows-x64">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -17,6 +17,9 @@
       }
       * {
         box-sizing: border-box;
+      }
+      [hidden] {
+        display: none !important;
       }
       body {
         margin: 0 auto;
@@ -54,6 +57,11 @@
       code {
         color: #b6dffa;
         font: inherit;
+        overflow-wrap: anywhere;
+      }
+      .command {
+        display: block;
+        margin-top: 8px;
       }
       .instructions {
         color: #c1cad0;
@@ -141,7 +149,15 @@
     <main>
       <h1 data-text="heading"></h1>
       <div class="instructions">
-        <p>
+        <p data-linux-only hidden>
+          <span data-text="installLinux"></span>
+          <code class="command">./qcatch --install</code>
+        </p>
+        <p data-linux-only hidden>
+          <span data-text="connectLinux"></span>
+          <code class="command">~/.local/bin/qcatch --connect-browser chrome</code>
+        </p>
+        <p data-windows-only>
           <span data-text="open"></span> <code>edge://extensions</code>
           <span data-text="or"></span> <code>chrome://extensions</code>.
         </p>
@@ -149,17 +165,18 @@
           <span data-text="enable"></span>
           <strong data-text="developer"></strong><span data-text="then"></span>
           <strong data-text="unpacked"></strong>.
+          <span data-text="folderLinux" data-linux-only hidden></span>
         </p>
       </div>
-      <label class="folder-label" for="path" data-text="folder"></label>
-      <div class="folder">
+      <label class="folder-label" for="path" data-text="folder" data-windows-only></label>
+      <div class="folder" data-windows-only>
         <input id="path" readonly /><button
           id="copy"
           type="button"
           data-text="copy"
         ></button>
       </div>
-      <p class="result" id="result" role="status"></p>
+      <p class="result" id="result" role="status" data-windows-only></p>
       <p class="last">
         <span data-text="pin"></span>
         <a href="https://qbutt-org.github.io/qplay/" data-text="player"></a>.
@@ -169,6 +186,9 @@
       const messages = {
         ru: {
           heading: "Подключить qcatch",
+          installLinux: "Откройте терминал в распакованной папке и выполните:",
+          connectLinux: "Подключите Chrome или Chromium. Для Edge замените chrome на edge:",
+          folderLinux: "Выберите папку из поля extensionDirectory в ответе команды.",
           open: "Откройте в браузере",
           or: "или",
           enable: "Включите",
@@ -184,6 +204,9 @@
         },
         en: {
           heading: "Connect qcatch",
+          installLinux: "Open a terminal in the extracted folder and run:",
+          connectLinux: "Connect Chrome or Chromium. For Edge, replace chrome with edge:",
+          folderLinux: "Select the folder from extensionDirectory in the command output.",
           open: "Open",
           or: "or",
           enable: "Enable",
@@ -198,13 +221,11 @@
           player: "qplay",
         },
       };
-      const path = decodeURIComponent(
-        new URL("extension/", location.href).pathname,
-      )
-        .replace(/^\//, "")
-        .replaceAll("/", "\\");
-      const pathField = document.getElementById("path");
-      pathField.value = path;
+      const linux = document.documentElement.dataset.platform === "linux-x64";
+      for (const element of document.querySelectorAll("[data-linux-only]"))
+        element.hidden = !linux;
+      for (const element of document.querySelectorAll("[data-windows-only]"))
+        element.hidden = linux;
       const languageSelect = document.getElementById("language");
       let language = navigator.languages[0]?.toLowerCase().startsWith("ru")
         ? "ru"
@@ -232,17 +253,26 @@
         } catch {}
         applyLanguage();
       };
-      document.getElementById("copy").onclick = async () => {
-        try {
-          await navigator.clipboard.writeText(path);
-          document.getElementById("result").textContent =
-            messages[language].copied;
-        } catch {
-          pathField.select();
-          document.getElementById("result").textContent =
-            messages[language].failed;
-        }
-      };
+      if (!linux) {
+        const path = decodeURIComponent(
+          new URL("extension/", location.href).pathname,
+        )
+          .replace(/^\//, "")
+          .replaceAll("/", "\\");
+        const pathField = document.getElementById("path");
+        pathField.value = path;
+        document.getElementById("copy").onclick = async () => {
+          try {
+            await navigator.clipboard.writeText(path);
+            document.getElementById("result").textContent =
+              messages[language].copied;
+          } catch {
+            pathField.select();
+            document.getElementById("result").textContent =
+              messages[language].failed;
+          }
+        };
+      }
       applyLanguage();
     </script>
   </body>

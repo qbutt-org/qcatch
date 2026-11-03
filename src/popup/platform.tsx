@@ -10,6 +10,7 @@ import type {
 import { ErrorNotice, Header, useLanguage } from "./language.tsx";
 import { NativeQueue } from "./native-queue.tsx";
 import { Queue } from "./downloads.tsx";
+import { downloadProduct } from "./product-download.ts";
 
 async function request<T>(message: PlatformMessage): Promise<T> {
   const result = (await chrome.runtime.sendMessage(message)) as T & {
@@ -98,12 +99,6 @@ export function PlatformPanel({
     };
   }, [reference.url]);
 
-  const install = (product: "qcatch" | "qplay") => {
-    void chrome.tabs.create({
-      url: `https://github.com/qbutt-org/${product}/releases/latest/download/${product}-setup.exe`,
-    });
-  };
-
   const run = async () => {
     setBusy(true);
     setError(undefined);
@@ -145,10 +140,10 @@ export function PlatformPanel({
   else if (reference.kind === "live") {
     switch (liveSetup.status) {
       case "qcatch":
-        actionLabel = "Установить qcatch для Windows";
+        actionLabel = "Скачать qcatch";
         break;
       case "qplay":
-        actionLabel = "Установить qplay";
+        actionLabel = "Скачать qplay";
         break;
       case "checking":
         actionLabel = "Подключаемся";
@@ -161,7 +156,7 @@ export function PlatformPanel({
 
   const primaryAction = () => {
     if (reference.kind === "live" && (liveSetup.status === "qcatch" || liveSetup.status === "qplay")) {
-      install(liveSetup.status);
+      void downloadProduct(liveSetup.status, language);
       return;
     }
     void run();
@@ -191,9 +186,9 @@ export function PlatformPanel({
         error?.includes("версия помощника несовместима")) && (
         <button
           type="button"
-          onClick={() => install("qcatch")}
+          onClick={() => void downloadProduct("qcatch", language)}
         >
-          {t("Установить qcatch для Windows")}
+          {t("Скачать qcatch")}
         </button>
       )}
       <NativeQueue

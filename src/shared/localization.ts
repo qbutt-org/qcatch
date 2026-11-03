@@ -124,9 +124,9 @@ const english = {
   "Страница аниме изменилась. Откройте popup заново.":
     "The anime page changed. Reopen qcatch.",
   "Открыть в qplay": "Open in qplay",
-  "Установить qplay": "Install qplay",
-  "Установить qbutt": "Install qbutt",
-  "Установить qcatch для Windows": "Install qcatch for Windows",
+  "Скачать qplay": "Download qplay",
+  "Скачать qbutt": "Download qbutt",
+  "Скачать qcatch": "Download qcatch",
   "Смотреть в qbutt": "Watch in qbutt",
   "Скачать через qbutt": "Download with qbutt",
   "Открываем qplay…": "Opening qplay…",
@@ -143,9 +143,9 @@ const english = {
   "Выбор передачи устарел. Откройте qcatch заново.": "The transfer selection expired. Reopen qcatch.",
   "Обновите страницу и снова выберите видео в qcatch.": "Reload the page and select the video in qcatch again.",
   "Выбранное видео изменилось или передача устарела. Откройте qcatch и передайте видео заново.": "This capture expired or changed. Open qcatch and send the media again.",
-  "Нужно приложение на компьютере": "Install the Windows app",
-  "Установите или запустите qcatch для Windows.":
-    "Install or launch qcatch for Windows.",
+  "Нужно приложение на компьютере": "Desktop app required",
+  "Установите или запустите qcatch.":
+    "Install or launch qcatch.",
   "Скачать приложение": "Download app",
   "Подробности подключения": "Connection details",
   "Не удалось подготовить загрузку": "Could not prepare the download",
@@ -187,18 +187,18 @@ const english = {
   "Не удалось сохранить выбор. Оставьте это окно открытым до начала скачивания.":
     "Could not save your selection. Keep this window open until the download starts.",
   "Не удалось обновить список загрузок. Проверьте приложение qcatch на компьютере.":
-    "Could not refresh downloads. Check the qcatch Windows app.",
+    "Could not refresh downloads. Check the qcatch app.",
   "Нет ответа от фоновой части расширения. Нажмите «Обновить» на карточке qcatch в списке расширений и откройте popup заново.":
     "The extension is not responding. Reload qcatch on the browser extensions page, then reopen it.",
   "Локальный помощник не отвечает. Установите или запустите qcatch и повторите попытку.":
-    "qcatch for Windows is not responding. Install or launch it and try again.",
+    "qcatch is not responding. Install or launch it and try again.",
   "Видео YouTube можно открыть в qplay или скачать через qcatch.":
     "Open YouTube videos in qplay or download them through qcatch.",
   "Откройте конкретное видео на YouTube.": "Open a specific YouTube video.",
   "Проверьте формат и границы отрезка: конец должен быть позже начала.":
     "Check the format and clip range: end must be later than start.",
   "Обновите qcatch: версия помощника несовместима с расширением.":
-    "Update qcatch: the Windows app and extension versions are incompatible.",
+    "Update qcatch: the app and extension versions are incompatible.",
   "Запустите видео или трек на странице, затем откройте его в qplay.":
     "Play the video or track on the page, then open it in qplay.",
   "Неизвестная загрузка.": "Unknown download.",
