@@ -92,18 +92,27 @@ for (const path of await files(bundle)) {
 }
 const portable = "qcatch-linux-x64.zip";
 await Bun.write(join(artifacts, portable), zipSync(archive, { level: 6 }));
+const tarball = "qcatch-linux-x64.tar.gz";
+await run([
+  "tar", "--create", "--gzip", "--file", join(artifacts, tarball),
+  "--directory", bundle, ".",
+]);
+await run([
+  "tar", "--compare", "--gzip", "--file", join(artifacts, tarball),
+  "--directory", bundle,
+]);
 const sourceAsset = `qcatch-${version}-linux-runtime-sources.zip`;
 await buildRuntimeSourceArchive(join(artifacts, sourceAsset));
-const assets = await Promise.all([portable, `qcatch-${version}-extension.zip`, sourceAsset].map(async (name) => {
+const assets = await Promise.all([portable, tarball, `qcatch-${version}-extension.zip`, sourceAsset].map(async (name) => {
   const bytes = await Bun.file(join(artifacts, name)).bytes();
   return { name, size: bytes.length, sha256: digest(bytes) };
 }));
 await Bun.write(join(artifacts, "release-manifest-linux.json"), JSON.stringify({
   ...identity,
   extensionId: (await Bun.file(join(root, "release/extension-id.txt")).text()).trim(),
-  nativeHost: "org.qbutt.qcatch", assets, userReleaseAssets: [portable],
+  nativeHost: "org.qbutt.qcatch", assets, userReleaseAssets: [portable, tarball],
   sourceRelease: { tag: `v${version}-sources`, assets: [sourceAsset] },
   runtimeSources: await Bun.file(join(runtime, "sources.json")).json(),
 }, null, 2) + "\n");
 await Bun.write(join(artifacts, "SHA256SUMS-linux"), assets.map(({ name, sha256 }) => `${sha256}  ${name}`).join("\n") + "\n");
-console.log(`Built ${join(artifacts, portable)}. Extract and run ./qcatch --install.`);
+console.log(`Built ${join(artifacts, portable)} and ${join(artifacts, tarball)}. Extract and run ./qcatch --install.`);
