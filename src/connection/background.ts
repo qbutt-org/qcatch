@@ -197,6 +197,12 @@ async function backgroundTab(url: string, signal: AbortSignal): Promise<chrome.t
     return chrome.tabs.create({ url, active: false, windowId: window.id });
 }
 
+function rejectVkLoginRedirect(currentUrl: string | undefined, sourceUrl: string): void {
+    if (currentUrl && URL.canParse(currentUrl) && new URL(currentUrl).origin === "https://login.vk.ru") {
+        throw new SourceError("login_required", "Войдите в VK Видео в выбранном браузере и повторите действие.", sourceUrl);
+    }
+}
+
 async function searchVk(command: BrowserCommand, signal: AbortSignal) {
     const url = vkSearchUrl(command.query!);
     if (command.url !== url) throw new Error("Invalid VK search address.");
@@ -219,6 +225,7 @@ async function searchVk(command: BrowserCommand, signal: AbortSignal) {
             bounded.throwIfAborted();
             const current = await abortable(chrome.tabs.get(tabId), bounded);
             if (current.url !== url) {
+                rejectVkLoginRedirect(current.url, url);
                 if (current.url !== "about:blank") throw new SourceError("browser_check_required", "Open VK Video, complete sign-in or verification, and search again.", url);
                 await delay(250, bounded);
                 continue;
@@ -593,7 +600,11 @@ async function resolve(command: BrowserCommand, controller: AbortController) {
 }
 
 async function confirmSelection(probe: Probe, sourceUrl: string): Promise<void> {
-    if ((await chrome.tabs.get(probe.tabId)).url !== probe.page.url) {
+    const currentUrl = (await chrome.tabs.get(probe.tabId)).url;
+    if (currentUrl !== probe.page.url) {
+        if (probe.page.url === sourceUrl && parseVkVideoUrl(sourceUrl)) {
+            rejectVkLoginRedirect(currentUrl, sourceUrl);
+        }
         throw new SourceError("selected_content_changed", "Источник перенаправил выбранный плеер на другую страницу. Выберите доступный вариант в источнике.", sourceUrl);
     }
     if (probe.selected !== probe.page) {

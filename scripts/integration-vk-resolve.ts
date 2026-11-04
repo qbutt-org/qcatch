@@ -169,9 +169,14 @@ Object.defineProperty(globalThis, "chrome", { value: {
     },
     async update(tabId: number, options: { url: string; muted: boolean }) {
       check(options.muted, "Resolve did not mute before navigation");
-      tabs.get(tabId)!.url = options.url;
-      page.href = options.url;
-      announceFrame(tabId, options.url, 0, "", true);
+      const redirects: Record<string, string> = {
+        "vk-login": "https://login.vk.ru/?state=fixture",
+        "unrelated-redirect": "https://vkvideo.ru/video-1_2",
+      };
+      const target = redirects[mode] ?? options.url;
+      tabs.get(tabId)!.url = target;
+      page.href = target;
+      announceFrame(tabId, target, 0, "", true);
     },
     async get(tabId: number) { return tabs.get(tabId); },
     async remove(tabId: number) { tabs.delete(tabId); frames.delete(tabId); documentAbort.abort(); },
@@ -314,6 +319,31 @@ try {
   check(!JSON.stringify(embedded.result).includes("fixture-access"), "Private access key leaked into descriptor");
   checks.push("exact Yummy iframe -> selected frame -> access_key/list -> canonical secret-free identity");
   checks.push("original same-URL iframe and nested named iframe cannot replace the owned direct-child sender");
+
+  for (const [scenario, code] of [
+    ["vk-login", "login_required"],
+    ["unrelated-redirect", "selected_content_changed"],
+  ] as const) {
+    reset();
+    mode = scenario;
+    const requests = forms.length;
+    const rejected = await resolve();
+    check(rejected.error?.code === code && !rejected.result && tabs.size === 0,
+      `${scenario} lost its exact failure or left an owned tab open`);
+    check(forms.length === requests && !JSON.stringify(rejected).includes("state=fixture"),
+      `${scenario} attempted media resolution or exposed login state`);
+    checks.push(scenario);
+  }
+
+  reset();
+  mode = "vk-login";
+  const search = await new Promise<BrowserResponse>(complete => {
+    nativeReply = complete;
+    nativeMessage({ id: ++commandId, method: "vk-search", url: "https://vkvideo.ru/?q=Sintel", query: "Sintel" });
+  });
+  check(search.error?.code === "login_required" && !search.result && tabs.size === 0
+    && !JSON.stringify(search).includes("state=fixture"), "VK search lost its sign-in failure or left an owned tab open");
+  checks.push("VK search login redirect");
 
   for (const rejectedMode of ["duplicate-frame", "failed-frame"]) {
     reset();
