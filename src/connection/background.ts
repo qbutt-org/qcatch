@@ -197,9 +197,26 @@ async function backgroundTab(url: string, signal: AbortSignal): Promise<chrome.t
     return chrome.tabs.create({ url, active: false, windowId: window.id });
 }
 
-function rejectVkLoginRedirect(currentUrl: string | undefined, sourceUrl: string): void {
-    if (currentUrl && URL.canParse(currentUrl) && new URL(currentUrl).origin === "https://login.vk.ru") {
-        throw new SourceError("login_required", "Войдите в VK Видео в выбранном браузере и повторите действие.", sourceUrl);
+function vkLoginRedirect(currentUrl: string | undefined, sourceUrl: string): SourceError | undefined {
+    if (!currentUrl || !URL.canParse(currentUrl) || new URL(currentUrl).origin !== "https://login.vk.ru") return;
+    return new SourceError("login_required", "Войдите в VK Видео в выбранном браузере и повторите действие.", sourceUrl);
+}
+
+async function withVkLoginRedirect<T>(
+    tabId: number, sourceUrl: string, signal: AbortSignal, navigate: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+    const redirect = new AbortController();
+    const observe = (details: chrome.webRequest.OnBeforeRedirectDetails) => {
+        if (details.tabId !== tabId || details.type !== "main_frame" || details.url !== sourceUrl) return;
+        const error = vkLoginRedirect(details.redirectUrl, sourceUrl);
+        if (error) redirect.abort(error);
+    };
+    // VK can issue the redirect long before Chromium commits the login page.
+    chrome.webRequest.onBeforeRedirect.addListener(observe, { tabId, types: ["main_frame"], urls: ["http://*/*", "https://*/*"] });
+    try {
+        return await navigate(AbortSignal.any([signal, redirect.signal]));
+    } finally {
+        chrome.webRequest.onBeforeRedirect.removeListener(observe);
     }
 }
 
@@ -210,37 +227,39 @@ async function searchVk(command: BrowserCommand, signal: AbortSignal) {
     searchingVk = true;
     const bounded = AbortSignal.any([signal, AbortSignal.timeout(15_000)]);
     let opening: Promise<chrome.tabs.Tab> | undefined;
-    let tabId: number | undefined;
     try {
         bounded.throwIfAborted();
         opening = backgroundTab("about:blank", bounded);
         const tab = await abortable(opening, bounded);
-        tabId = tab.id;
         bounded.throwIfAborted();
+        const tabId = tab.id;
         if (tabId === undefined) throw new Error("Could not open VK search in the background.");
-        await abortable(chrome.tabs.update(tabId, { muted: true, url }), bounded);
-        let previous = "";
-        let stable = 0;
-        while (true) {
-            bounded.throwIfAborted();
-            const current = await abortable(chrome.tabs.get(tabId), bounded);
-            if (current.url !== url) {
-                rejectVkLoginRedirect(current.url, url);
-                if (current.url !== "about:blank") throw new SourceError("browser_check_required", "Open VK Video, complete sign-in or verification, and search again.", url);
-                await delay(250, bounded);
-                continue;
+        return await withVkLoginRedirect(tabId, url, bounded, async (navigation) => {
+            await abortable(chrome.tabs.update(tabId, { muted: true, url }), navigation);
+            let previous = "";
+            let stable = 0;
+            while (true) {
+                navigation.throwIfAborted();
+                const current = await abortable(chrome.tabs.get(tabId), navigation);
+                if (current.url !== url) {
+                    const login = vkLoginRedirect(current.url, url);
+                    if (login) throw login;
+                    if (current.url !== "about:blank") throw new SourceError("browser_check_required", "Open VK Video, complete sign-in or verification, and search again.", url);
+                    await delay(250, navigation);
+                    continue;
+                }
+                const state = await abortable(commandTab(tabId, { type: "vk-search", query: command.query }), navigation)
+                    .catch(() => undefined);
+                navigation.throwIfAborted();
+                if (state?.error) throw new SourceError(state.code || "browser_error", state.error, url);
+                if (state && state.url !== url) throw new SourceError("selected_content_changed", "VK changed the search page. Search again.", url);
+                const snapshot = state?.ready ? JSON.stringify(state.videos) : "";
+                stable = snapshot && snapshot === previous ? stable + 1 : 0;
+                previous = snapshot;
+                if (stable >= 2) return { query: command.query, videos: state.videos };
+                await delay(250, navigation);
             }
-            const state = await abortable(commandTab(tabId, { type: "vk-search", query: command.query }), bounded)
-                .catch(() => undefined);
-            bounded.throwIfAborted();
-            if (state?.error) throw new SourceError(state.code || "browser_error", state.error, url);
-            if (state && state.url !== url) throw new SourceError("selected_content_changed", "VK changed the search page. Search again.", url);
-            const snapshot = state?.ready ? JSON.stringify(state.videos) : "";
-            stable = snapshot && snapshot === previous ? stable + 1 : 0;
-            previous = snapshot;
-            if (stable >= 2) return { query: command.query, videos: state.videos };
-            await delay(250, bounded);
-        }
+        });
     } catch (error) {
         if (!signal.aborted && bounded.aborted) {
             throw new SourceError("browser_timeout", "VK search did not finish. Open VK Video and try again.", url);
@@ -493,6 +512,7 @@ async function resolve(command: BrowserCommand, controller: AbortController) {
     if (probes.size >= 3) throw new SourceError("browser_busy", "Браузер готовит другое видео. Повторите действие через несколько секунд.");
     const sourceUrl = publicUrl(command.url!);
     const referrer = command.referrer ? publicUrl(command.referrer) : sourceUrl;
+    const vk = parseVkVideoUrl(sourceUrl);
     // Create blank, mute, then navigate: background player audio cannot escape.
     const tab = await backgroundTab("about:blank", controller.signal);
     if (tab.id === undefined) throw new Error("Не удалось открыть плеер в фоне.");
@@ -504,15 +524,18 @@ async function resolve(command: BrowserCommand, controller: AbortController) {
     probes.set(tab.id, probe);
     try {
         controller.signal.throwIfAborted();
-        await chrome.tabs.update(tab.id, { muted: true, url: referrer });
-        await loaded(tab.id, controller.signal);
+        const navigate = async (signal: AbortSignal) => {
+            await abortable(chrome.tabs.update(probe.tabId, { muted: true, url: referrer }), signal);
+            await loaded(probe.tabId, signal);
+        };
+        if (vk && referrer === sourceUrl) await withVkLoginRedirect(probe.tabId, sourceUrl, controller.signal, navigate);
+        else await navigate(controller.signal);
         if (referrer !== sourceUrl) {
             page.url = publicUrl((await chrome.tabs.get(tab.id)).url!);
             await confirmSelection(probe, sourceUrl);
             await mountFrame(probe, sourceUrl, sourceUrl);
         }
         await confirmSelection(probe, sourceUrl);
-        const vk = parseVkVideoUrl(sourceUrl);
         if (vk) {
             // The source already supplied an exact video URL, including access parameters.
             // Do not turn episode metadata into VK query parameters or sniff recommendations.
@@ -603,7 +626,8 @@ async function confirmSelection(probe: Probe, sourceUrl: string): Promise<void> 
     const currentUrl = (await chrome.tabs.get(probe.tabId)).url;
     if (currentUrl !== probe.page.url) {
         if (probe.page.url === sourceUrl && parseVkVideoUrl(sourceUrl)) {
-            rejectVkLoginRedirect(currentUrl, sourceUrl);
+            const login = vkLoginRedirect(currentUrl, sourceUrl);
+            if (login) throw login;
         }
         throw new SourceError("selected_content_changed", "Источник перенаправил выбранный плеер на другую страницу. Выберите доступный вариант в источнике.", sourceUrl);
     }

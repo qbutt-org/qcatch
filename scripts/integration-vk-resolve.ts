@@ -42,6 +42,10 @@ let frameMessage!: (
 let completedNavigation!: (details: {
   tabId: number; type: string; parentFrameId: number; frameId: number; url: string; statusCode: number;
 }) => void;
+type RedirectListener = (details: {
+  tabId: number; type: string; url: string; redirectUrl: string;
+}) => void;
+const redirectListeners = new Set<RedirectListener>();
 let nativeReply!: (response: BrowserResponse) => void;
 let requestHeaders!: (details: { tabId: number; frameId: number; url: string; requestHeaders: { name: string; value: string }[] }) => void;
 let inMainWorld = false;
@@ -169,6 +173,19 @@ Object.defineProperty(globalThis, "chrome", { value: {
     },
     async update(tabId: number, options: { url: string; muted: boolean }) {
       check(options.muted, "Resolve did not mute before navigation");
+      if (mode === "normal") {
+        for (const listener of redirectListeners) {
+          listener({ tabId, type: "sub_frame", url: options.url, redirectUrl: "https://login.vk.ru/" });
+          listener({ tabId: tabId + 1, type: "main_frame", url: options.url, redirectUrl: "https://login.vk.ru/" });
+          listener({ tabId, type: "main_frame", url: "https://vkvideo.ru/video-1_2", redirectUrl: "https://login.vk.ru/" });
+        }
+      }
+      if (mode === "vk-login-pending") {
+        for (const listener of redirectListeners) {
+          listener({ tabId, type: "main_frame", url: options.url, redirectUrl: "https://login.vk.ru/?state=fixture" });
+        }
+        return new Promise<void>(() => {});
+      }
       const redirects: Record<string, string> = {
         "vk-login": "https://login.vk.ru/?state=fixture",
         "unrelated-redirect": "https://vkvideo.ru/video-1_2",
@@ -261,6 +278,10 @@ Object.defineProperty(globalThis, "chrome", { value: {
     return mode === "missing-script" ? [] : [{ result: await script.func(...script.args) }];
   } },
   webRequest: {
+    onBeforeRedirect: {
+      addListener(listener: RedirectListener) { redirectListeners.add(listener); },
+      removeListener(listener: RedirectListener) { redirectListeners.delete(listener); },
+    },
     onCompleted: { addListener(listener: typeof completedNavigation) { completedNavigation = listener; } },
     onBeforeSendHeaders: { addListener(listener: typeof requestHeaders) { requestHeaders = listener; } },
   },
@@ -322,28 +343,31 @@ try {
 
   for (const [scenario, code] of [
     ["vk-login", "login_required"],
+    ["vk-login-pending", "login_required"],
     ["unrelated-redirect", "selected_content_changed"],
   ] as const) {
     reset();
     mode = scenario;
     const requests = forms.length;
     const rejected = await resolve();
-    check(rejected.error?.code === code && !rejected.result && tabs.size === 0,
+    check(rejected.error?.code === code && !rejected.result && tabs.size === 0 && redirectListeners.size === 0,
       `${scenario} lost its exact failure or left an owned tab open`);
     check(forms.length === requests && !JSON.stringify(rejected).includes("state=fixture"),
       `${scenario} attempted media resolution or exposed login state`);
     checks.push(scenario);
   }
 
-  reset();
-  mode = "vk-login";
-  const search = await new Promise<BrowserResponse>(complete => {
-    nativeReply = complete;
-    nativeMessage({ id: ++commandId, method: "vk-search", url: "https://vkvideo.ru/?q=Sintel", query: "Sintel" });
-  });
-  check(search.error?.code === "login_required" && !search.result && tabs.size === 0
-    && !JSON.stringify(search).includes("state=fixture"), "VK search lost its sign-in failure or left an owned tab open");
-  checks.push("VK search login redirect");
+  for (const scenario of ["vk-login", "vk-login-pending"]) {
+    reset();
+    mode = scenario;
+    const search = await new Promise<BrowserResponse>(complete => {
+      nativeReply = complete;
+      nativeMessage({ id: ++commandId, method: "vk-search", url: "https://vkvideo.ru/?q=Sintel", query: "Sintel" });
+    });
+    check(search.error?.code === "login_required" && !search.result && tabs.size === 0 && redirectListeners.size === 0
+      && !JSON.stringify(search).includes("state=fixture"), "VK search lost its sign-in failure or left an owned tab open");
+    checks.push("VK search " + scenario);
+  }
 
   for (const rejectedMode of ["duplicate-frame", "failed-frame"]) {
     reset();
