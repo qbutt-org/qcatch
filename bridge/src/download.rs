@@ -120,63 +120,88 @@ fn number(value: &Value, field: &str) -> f64 {
     value[field].as_f64().unwrap_or(0.0)
 }
 
-fn select_formats(value: &Value, audio_only: bool) -> Result<Vec<&Value>> {
-    let formats = value["formats"]
-        .as_array()
-        .context("Видео не содержит доступных форматов")?;
-    let usable = |format: &&Value| {
-        format["has_drm"] != true
-            && format["url"].as_str().is_some()
-            && format["format_id"].as_str().is_some()
+fn ranked_formats<'a>(
+    formats: impl Iterator<Item = &'a Value>,
+    score: impl Fn(&Value) -> (f64, f64),
+) -> String {
+    let mut ranked: Vec<_> = formats
+        .filter(|format| format["has_drm"] != true && format["url"].is_string())
+        .filter_map(|format| {
+            let id = format["format_id"].as_str()?;
+            // The extractor's format IDs are literals in the selector grammar.
+            if id.is_empty()
+                || !id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-._".contains(&byte))
+            {
+                return None;
+            }
+            Some((id, score(format)))
+        })
+        .collect();
+    ranked.sort_by(|(_, left), (_, right)| left.partial_cmp(right).expect("finite format scores"));
+    ranked
+        .into_iter()
+        .rev()
+        .map(|(id, _)| id)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn format_selector(formats: &[Value], mp3: bool) -> Result<String> {
+    let has_codec =
+        |format: &Value, key: &str| format[key].as_str().is_some_and(|codec| codec != "none");
+    let audio_score = |format: &Value| (number(format, "abr"), number(format, "tbr"));
+    let video_score = |format: &Value| {
+        (
+            number(format, "width") * number(format, "height"),
+            number(format, "tbr"),
+        )
     };
-    let audio = formats
-        .iter()
-        .filter(usable)
-        .filter(|format| {
-            format["acodec"]
-                .as_str()
-                .is_some_and(|codec| codec != "none")
-        })
-        .max_by(|left, right| {
-            let score = |format: &Value| {
-                (
-                    format["vcodec"] == "none",
-                    number(format, "abr"),
-                    number(format, "tbr"),
-                )
-            };
-            score(left)
-                .partial_cmp(&score(right))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .context("Нет доступной аудиодорожки")?;
-    if audio_only {
-        return Ok(vec![audio]);
+    let audio_only = ranked_formats(
+        formats
+            .iter()
+            .filter(|format| has_codec(format, "acodec") && format["vcodec"] == "none"),
+        audio_score,
+    );
+    let combined = ranked_formats(
+        formats
+            .iter()
+            .filter(|format| has_codec(format, "acodec") && has_codec(format, "vcodec")),
+        |format| {
+            if mp3 {
+                audio_score(format)
+            } else {
+                video_score(format)
+            }
+        },
+    );
+    if mp3 {
+        ensure!(
+            !audio_only.is_empty() || !combined.is_empty(),
+            "Нет доступной аудиодорожки"
+        );
+        return Ok([audio_only, combined]
+            .into_iter()
+            .filter(|ids| !ids.is_empty())
+            .collect::<Vec<_>>()
+            .join("/"));
     }
-    let video = formats
-        .iter()
-        .filter(usable)
-        .filter(|format| {
-            format["vcodec"]
-                .as_str()
-                .is_some_and(|codec| codec != "none")
-        })
-        .max_by(|left, right| {
-            let score = |format: &Value| {
-                (
-                    number(format, "width") * number(format, "height"),
-                    number(format, "tbr"),
-                )
-            };
-            score(left)
-                .partial_cmp(&score(right))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .context("Нет доступной видеодорожки")?;
-    if video["format_id"] == audio["format_id"] {
-        Ok(vec![video])
+
+    if audio_only.is_empty() {
+        ensure!(!combined.is_empty(), "Нет доступного видео со звуком");
+        return Ok(combined);
+    }
+    let video = ranked_formats(
+        formats.iter().filter(|format| has_codec(format, "vcodec")),
+        video_score,
+    );
+    ensure!(!video.is_empty(), "Нет доступной видеодорожки");
+    let split = format!("({video})+({audio_only})");
+    if combined.is_empty() {
+        Ok(split)
     } else {
-        Ok(vec![video, audio])
+        Ok(format!("({split})/({combined})"))
     }
 }
 
@@ -206,23 +231,22 @@ pub fn download(
         job.start < end && end <= duration,
         "Длительность видео изменилась. Обновите информацию и выберите фрагмент снова."
     );
-    let formats = select_formats(&metadata, job.format == "mp3")?;
+    let available_formats = metadata["formats"]
+        .as_array()
+        .context("Видео не содержит доступных форматов")?;
+    let selection = format_selector(available_formats, job.format == "mp3")?;
     let temporary = home.join("temp").join(id);
     fs::create_dir_all(&temporary)?;
 
     let output = temporary.join(format!("finished.{}", job.format));
     let trimmed = job.start > 0.0 || end < duration;
     update(state, id, "downloading", 0.0);
-    let selection = formats
-        .iter()
-        .map(|format| format["format_id"].as_str().unwrap())
-        .collect::<Vec<_>>()
-        .join("+");
     let info = temporary.join("source.info.json");
     fs::write(&info, serde_json::to_vec(&metadata)?)?;
     let mut command = yt_dlp(tools, jar.as_ref());
     command
         .args([
+            "--check-formats",
             "--format",
             &selection,
             "--audio-multistreams",
@@ -235,15 +259,17 @@ pub fn download(
             "--progress-template",
             "download:SC_PROGRESS:%(progress._percent_str)s",
             "--print",
-            "after_move:SC_FILE:%(filepath)j",
+            "after_move:SC_FILE:%(.{filepath,format_id})j",
             "--no-simulate",
             "--no-overwrites",
             "--output",
         ])
         .arg(temporary.join("source.%(ext)s"))
+        .arg("--paths")
+        .arg(format!("temp:{}", temporary.display()))
         .arg("--load-info-json")
         .arg(&info);
-    let mut source = None;
+    let mut downloaded = None;
     process(
         &mut command,
         cancel,
@@ -261,19 +287,37 @@ pub fn download(
                 );
             }
             if let Some(value) = line.strip_prefix("SC_FILE:") {
-                source = serde_json::from_str::<String>(value)
-                    .ok()
-                    .map(PathBuf::from);
+                downloaded = serde_json::from_str::<Value>(value).ok();
             }
         },
     )?;
-    let source = source.context("yt-dlp не сообщил имя загруженного файла")?;
+    let downloaded = downloaded.context("yt-dlp не сообщил о загруженном файле")?;
+    let source = Path::new(
+        downloaded["filepath"]
+            .as_str()
+            .context("Missing download path")?,
+    );
     ensure!(
-        fs::canonicalize(&source)?.starts_with(fs::canonicalize(&temporary)?),
+        fs::canonicalize(source)?.starts_with(fs::canonicalize(&temporary)?),
         "Unexpected download path"
     );
+    let formats = downloaded["format_id"]
+        .as_str()
+        .context("yt-dlp не сообщил формат загруженного файла")?
+        .split('+')
+        .map(|id| {
+            available_formats
+                .iter()
+                .find(|format| format["format_id"] == id)
+                .context("yt-dlp выбрал неизвестный формат")
+        })
+        .collect::<Result<Vec<_>>>()?;
+    ensure!(
+        matches!(formats.len(), 1 | 2),
+        "yt-dlp выбрал неверное число форматов"
+    );
     update(state, id, "processing", 0.85);
-    let mut ffmpeg = command_for_conversion(tools, &source, &output, &job, &formats, trimmed);
+    let mut ffmpeg = command_for_conversion(tools, source, &output, &job, &formats, trimmed);
     process(
         &mut ffmpeg,
         cancel,

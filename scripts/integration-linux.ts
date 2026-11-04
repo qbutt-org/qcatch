@@ -82,11 +82,24 @@ async function startingHealth(): Promise<any> {
 
 let slow = false;
 let activeTransfers = 0;
+let rejectedFormats = 0;
 const media = join(home, "fixture.mp4");
+const video = join(home, "fixture-video.mp4");
+const audio = join(home, "fixture-audio.m4a");
+const assets = new Map([["/fixture.mp4", media], ["/fixture-video.mp4", video], ["/fixture-audio.m4a", audio]]);
+const requestedTracks = new Set<string>();
 const server = Bun.serve({
   hostname: "127.0.0.1", port: 0,
-  async fetch() {
-    const bytes = await Bun.file(media).bytes();
+  async fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path === "/blocked.mp4") {
+      rejectedFormats++;
+      return new Response(null, { status: 403 });
+    }
+    const file = assets.get(path);
+    if (!file) return new Response(null, { status: 404 });
+    requestedTracks.add(path);
+    const bytes = await Bun.file(file).bytes();
     if (!slow) return new Response(bytes, { headers: { "Content-Type": "video/mp4", "Content-Length": String(bytes.length) } });
     activeTransfers++;
     let offset = 0;
@@ -194,9 +207,14 @@ try {
 
   const tools = join(data, "app/tools");
   await run([join(tools, "ffmpeg"), "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=25", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000", "-t", "6", "-c:v", "libx264", "-c:a", "aac", "-y", media]);
+  await run([join(tools, "ffmpeg"), "-hide_banner", "-loglevel", "error", "-i", media,
+    "-map", "0:v:0", "-c", "copy", video, "-map", "0:a:0", "-c", "copy", audio]);
   const metadata = {
     id: "Fixture1234", title: "Generated Linux fixture", duration: 6, extractor: "generic", extractor_key: "Generic", webpage_url: "https://www.youtube.com/watch?v=Fixture1234",
-    formats: [{ format_id: "fixture", url: `${server.url}fixture.mp4`, ext: "mp4", protocol: "http", vcodec: "h264", acodec: "aac", width: 320, height: 180, tbr: 200 }],
+    formats: [
+      { format_id: "fixture", url: `${server.url}fixture.mp4`, ext: "mp4", protocol: "http", vcodec: "h264", acodec: "aac", width: 320, height: 180, tbr: 200 },
+      { format_id: "blocked", url: `${server.url}blocked.mp4`, ext: "mp4", protocol: "http", vcodec: "h264", acodec: "aac", width: 1280, height: 720, tbr: 1200 },
+    ],
   };
   const info = join(home, "fixture.json");
   await writeFile(info, JSON.stringify(metadata));
@@ -239,11 +257,23 @@ if (args.includes("--dump-single-json")) {
   await api("/info", input);
   await until(() => api("/info", input), (value) => value.status === "ready", "source metadata");
   const published = new Map<string, string>();
-  for (const format of ["mp4", "mp3", "mp4"]) {
+  for (const [format, split] of [["mp4", false], ["mp3", false], ["mp4", true]] as const) {
+    if (split) {
+      metadata.formats.push(
+        { format_id: "video", url: `${server.url}fixture-video.mp4`, ext: "mp4", protocol: "http", vcodec: "h264", acodec: "none", width: 320, height: 180, tbr: 250 },
+        { format_id: "audio", url: `${server.url}fixture-audio.m4a`, ext: "m4a", protocol: "http", vcodec: "none", acodec: "aac", width: 0, height: 0, tbr: 128 },
+      );
+      await writeFile(info, JSON.stringify(metadata));
+    }
+    const before = rejectedFormats;
     const job = await api("/jobs", { ...input, format, start: 1, end: 4 });
     const done = await until(() => api("/jobs"), (value) => value.jobs.some((item: any) => item.id === job.id && ["completed", "failed", "canceled"].includes(item.status)), "generated download");
     const result = done.jobs.find((item: any) => item.id === job.id);
     check(result.status === "completed", `Generated ${format} failed: ${result.error}`);
+    check(rejectedFormats > before, `Generated ${format} did not try the unavailable preferred format`);
+    if (split) {
+      check(requestedTracks.has("/fixture-video.mp4") && requestedTracks.has("/fixture-audio.m4a"), "The split download did not use both selected tracks");
+    }
     const output = join(desktop, result.filename);
     await api(`/jobs/${job.id}/reveal`, {});
     await until(async () => fileManager!.uris, (uris) => uris.some((uri) => decodeURIComponent(new URL(uri).pathname) === output), "native file manager request");
