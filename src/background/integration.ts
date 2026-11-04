@@ -7,6 +7,7 @@ import { readTabState } from "./state.ts";
 import { bridgeRequest, NativeBridgeError } from "./native.ts";
 import { captureYoutubePlayback, readYoutubePlayer } from "./youtube.ts";
 import { performProductAction, readProductActions } from "./product-actions.ts";
+import { cookies } from "../connection/cookies.ts";
 
 export type { IntegrationMessage } from "../shared/integration.ts";
 
@@ -23,16 +24,6 @@ interface CaptureBinding {
   job?: DownloadJob;
   frames?: Array<{ frameId: number; documentId?: string; identity: FrameIdentity }>;
   resources?: Array<{ id: string; frameId: number; documentId: string; url: string }>;
-}
-
-interface PlaybackCookie {
-  domain: string;
-  path: string;
-  name: string;
-  value: string;
-  secure: boolean;
-  host_only: boolean;
-  expires: number | null;
 }
 
 export async function removeTabCaptures(tabId: number): Promise<void> {
@@ -70,7 +61,7 @@ function media(job: DownloadJob) {
   if (!main) throw new Error("Выберите источник видео.");
   const headers = new Map(
     main.headers
-      .filter(({ name }) => !/^(?:range|if-range)$/i.test(name))
+      .filter(({ name }) => !/^(?:range|if-range|cookie)$/i.test(name))
       .map(({ name, value }) => [name, value]),
   );
   headers.set("User-Agent", navigator.userAgent);
@@ -82,14 +73,9 @@ function media(job: DownloadJob) {
   };
 }
 
-async function privateTrackCredentials(job: DownloadJob): Promise<boolean> {
-  const origin = new URL(job.inputs[0]!.url).origin;
-  for (const source of [...job.inputs.slice(1), ...job.subtitles]) {
-    if (source.headers.some(({ name }) => /^(?:authorization|authorizations|x-)/i.test(name))) return true;
-    if (new URL(source.url).origin !== origin
-      && (await chrome.cookies.getAll({ url: source.url })).some((cookie) => !cookie.partitionKey)) return true;
-  }
-  return false;
+function privateTrackHeaders(job: DownloadJob): boolean {
+  return [...job.inputs.slice(1), ...job.subtitles].some((source) =>
+    source.headers.some(({ name }) => /^(?:authorization|authorizations|x-)/i.test(name)));
 }
 
 export async function handleIntegration(message: IntegrationMessage): Promise<unknown> {
@@ -151,11 +137,12 @@ async function prepareProductAction(message: Exclude<IntegrationMessage,
       source.headers.some(({ name }) => /^(?:authorization|authorizations|x-)/i.test(name)))) {
       throw new Error("This source requires private request headers. Download it through qcatch instead.");
     }
-    const cookies = new Map<string, PlaybackCookie>();
-    for (const source of [...job.inputs, ...job.subtitles]) {
-      for (const cookie of await chrome.cookies.getAll({ url: source.url })) {
-        if (cookie.partitionKey) continue;
-        cookies.set(`${cookie.domain}\n${cookie.path}\n${cookie.name}`, {
+    const session = await cookies(...[...job.inputs, ...job.subtitles].map((source) => source.url));
+    return async () => {
+      await validateCapture(binding);
+      await requestOpening("/play-media", {
+        ...resolved,
+        cookies: session.map((cookie) => ({
           domain: cookie.domain,
           path: cookie.path,
           name: cookie.name,
@@ -163,17 +150,13 @@ async function prepareProductAction(message: Exclude<IntegrationMessage,
           secure: cookie.secure,
           host_only: cookie.hostOnly,
           expires: cookie.expirationDate ?? null,
-        });
-      }
-    }
-    return async () => {
-      await validateCapture(binding);
-      await requestOpening("/play-media", { ...resolved, cookies: [...cookies.values()] });
+        })),
+      });
     };
   }
   if (binding.job) {
     if (binding.job.inputs.length > 2) throw new Error("qbutt currently supports one external audio track. Select one audio track and try again.");
-    if (await privateTrackCredentials(binding.job)) throw new Error("These audio or subtitle tracks require separate sign-in. Download them through qcatch instead.");
+    if (privateTrackHeaders(binding.job)) throw new Error("These audio or subtitle tracks require private request headers. Download them through qcatch instead.");
   }
   return async () => {
     await validateCapture(binding);
@@ -226,11 +209,10 @@ export async function resolveCapture(pageUrl: string, selection: Selection) {
   const job = binding.job!;
   const resolved = media(job);
   if (resolved.audio.length > 1) throw new Error("unsupported_multi_audio");
-  if (await privateTrackCredentials(job)) throw new Error("unsupported_private_tracks");
-  const cookies = (await chrome.cookies.getAll({ url: resolved.url })).filter((cookie) => !cookie.partitionKey);
-  if (cookies.length) resolved.headers.push(["Cookie", cookies.map(({ name, value }) => `${name}=${value}`).join("; ")]);
+  if (privateTrackHeaders(job)) throw new Error("unsupported_private_tracks");
+  const session = await cookies(...[...job.inputs, ...job.subtitles].map((source) => source.url));
   return {
-    kind: "video", resolver: "direct", url: resolved.url, headers: Object.fromEntries(resolved.headers),
+    kind: "video", resolver: "direct", url: resolved.url, headers: Object.fromEntries(resolved.headers), cookies: session,
     ...(resolved.audio[0] ? { audioUrl: resolved.audio[0] } : {}),
     subtitles: job.subtitles.map((subtitle) => ({ title: subtitle.name, url: subtitle.url, language: subtitle.language })),
     selection: { captureId: id },

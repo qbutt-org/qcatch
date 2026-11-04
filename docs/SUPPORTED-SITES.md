@@ -18,7 +18,7 @@
 | `old.yummyani.me` | Popup | Да | Выбор плеера, озвучек и субтитров |
 | `ru.yummyani.me` | Popup | Да | Выбор плеера, озвучек и субтитров |
 | `x.com`, `twitter.com` | One-click toolbar action | Не применимо | Не применимо |
-| `youtube.com`, `youtu.be`, `music.youtube.com` | Popup + локальный Windows-помощник | Нет | Целое видео/трек или отрезок; MP4/MP3 |
+| `youtube.com`, `youtu.be`, `music.youtube.com` | Popup + локальный помощник | Нет | Целое видео/трек или отрезок; MP4/MP3 |
 | `jut-su.net` | Универсальный popup | Нет | На странице |
 | `death-parade-jut-su.ru` | Универсальный popup | Нет | На странице |
 | `otakujoy.fun` | Универсальный popup | Нет | На странице |

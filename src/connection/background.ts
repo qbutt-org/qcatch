@@ -520,13 +520,12 @@ async function resolve(command: BrowserCommand, controller: AbortController) {
             if ("error" in result) throw new SourceError("media_unavailable", result.error, sourceUrl);
             const url = publicUrl(result.url);
             const subtitles = result.subtitles.map(track => ({ ...track, url: publicUrl(track.url) }));
-            const session = await cookies(url);
+            const session = await cookies(url, ...subtitles.map(track => track.url));
             const headers: Record<string, string> = { Referer: result.sourceUrl, "User-Agent": navigator.userAgent };
-            if (session.length) headers.Cookie = session.map(cookie => `${cookie.name}=${cookie.value}`).join("; ");
             await confirmSelection(probe, sourceUrl);
             controller.signal.throwIfAborted();
             return {
-                kind: "video", resolver: "direct", url, headers, subtitles,
+                kind: "video", resolver: "direct", url, headers, subtitles, cookies: session,
                 sourceUrl: result.sourceUrl, title: result.title, quality: result.quality,
                 selection: command.selection ?? {},
             };
@@ -572,11 +571,16 @@ async function resolve(command: BrowserCommand, controller: AbortController) {
         }
         const selected = pool[0]!;
         const headers: Record<string, string> = { Referer: selected.resource.initiator ?? selectedUrl, ...probe.requests.get(selected.resource.url)?.headers, "User-Agent": navigator.userAgent };
-        const sessionCookies = await cookies(selected.url);
-        if (sessionCookies.length) headers.Cookie = sessionCookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
+        for (const name of Object.keys(headers)) {
+            if (name.toLowerCase() === "cookie") delete headers[name];
+        }
+        const sourceUrls = [selected.url];
+        if ("audioUrl" in selected && selected.audioUrl) sourceUrls.push(selected.audioUrl);
+        if ("subtitles" in selected) sourceUrls.push(...selected.subtitles.map(track => track.url));
+        const sessionCookies = await cookies(...sourceUrls);
         await confirmSelection(probe, sourceUrl);
         return {
-            kind: "video", resolver: "direct", url: selected.url, headers,
+            kind: "video", resolver: "direct", url: selected.url, headers, cookies: sessionCookies,
             selection: command.selection ?? {},
             ...("audioUrl" in selected && selected.audioUrl ? { audioUrl: selected.audioUrl } : {}),
             ...("subtitles" in selected && selected.subtitles?.length ? { subtitles: selected.subtitles } : {}),

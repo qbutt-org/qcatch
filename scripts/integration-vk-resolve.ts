@@ -23,6 +23,7 @@ function check(condition: unknown, message: string): asserts condition {
 const id = "-234920203_456239678";
 const sourceUrl = `https://vkvideo.ru/video${id}`;
 const mediaUrl = "https://media.example.org/720.mp4";
+const subtitleUrl = "https://media.example.org/ru.vtt";
 const selection = { episode: "2", translationId: "42", player: "VK" };
 const page = { href: sourceUrl };
 const tabs = new Map<number, { id: number; url: string; status: string }>();
@@ -239,7 +240,7 @@ Object.defineProperty(globalThis, "chrome", { value: {
     },
   },
   cookies: { async getAll({ url }: { url: string }) {
-    if (url === playlistUrl) return [];
+    if (url === playlistUrl || url === subtitleUrl) return [];
     check(url === mediaUrl, "Resolve requested unrelated page cookies");
     return [{ name: "cdn", value: "fixture", domain: "media.example.org", path: "/", secure: true, hostOnly: true }];
   } },
@@ -277,18 +278,24 @@ function reset() {
   masterResponses = 0;
   params = { oid: -234920203, vid: 456239678, md_title: "Generated episode 2",
     url360: "https://media.example.org/360.mp4", url720: mediaUrl,
-    subs: [{ title: "Russian", lang: "ru", url: "https://media.example.org/ru.vtt" }] };
+    subs: [{ title: "Russian", lang: "ru", url: subtitleUrl }] };
 }
 
 try {
   reset();
   const response = await resolve();
   const result = response.result as { url: string; sourceUrl: string; quality: string;
-    headers: Record<string, string>; selection: unknown; subtitles: { url: string; language: string }[] };
+    headers: Record<string, string>; cookies: { name: string; value: string; domain: string; path: string; secure: boolean; hostOnly: boolean }[];
+    selection: unknown; subtitles: { url: string; language: string }[] };
   check(!response.error && result.url === mediaUrl && result.quality === "720p", "Maximum muxed MP4 was not selected");
   check(result.sourceUrl === sourceUrl && JSON.stringify(result.selection) === JSON.stringify(selection), "Exact identity changed");
   check(result.subtitles[0]?.language === "ru", "Subtitle language was lost");
-  const media = await fetch(result.url, { headers: result.headers });
+  check(!Object.keys(result.headers).some(name => name.toLowerCase() === "cookie"), "Video resolve flattened cookies into headers");
+  check(result.cookies.length === 1 && result.cookies[0]!.domain === "media.example.org"
+    && result.cookies[0]!.path === "/" && result.cookies[0]!.secure && result.cookies[0]!.hostOnly,
+  "Video resolve lost typed cookie scope");
+  const media = await fetch(result.url, { headers: { ...result.headers,
+    Cookie: result.cookies.map(cookie => `${cookie.name}=${cookie.value}`).join("; ") } });
   const received = join(output, "received.mp4");
   await writeFile(received, Buffer.from(await media.arrayBuffer()));
   check((await (await fetch(result.subtitles[0]!.url)).text()).startsWith("WEBVTT"), "Subtitle delivery failed");

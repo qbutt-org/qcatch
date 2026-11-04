@@ -21,6 +21,7 @@ let tabUrl = pageUrl;
 let cookieFailure = false;
 let missingReceiver = false;
 let cookieReadHook: (() => void) | undefined;
+let browserCookies: chrome.cookies.Cookie[] = [];
 let scriptReads = 0;
 let installed = false;
 let dropResponse = false;
@@ -137,12 +138,23 @@ Object.defineProperty(globalThis, "chrome", { value: {
       : request.target.frameIds?.join() === "0", "capture_expired");
     return [{ documentId: identity.documentId, result: { url: tabUrl, time: 42.25, media: [...identity.media] } }];
   } },
-  cookies: { async getAll() {
+  cookies: { async getAll({ url }: { url?: string }) {
     if (cookieFailure) throw new Error("Injected preparation failure");
     const hook = cookieReadHook;
     cookieReadHook = undefined;
     hook?.();
-    return [];
+    if (!url) return [];
+    const target = new URL(url);
+    return browserCookies.filter((cookie) => {
+      const domain = cookie.domain.replace(/^\./, "");
+      const domainMatches = target.hostname === domain
+        || !cookie.hostOnly && target.hostname.endsWith(`.${domain}`);
+      const pathMatches = target.pathname === cookie.path
+        || target.pathname.startsWith(cookie.path)
+          && (cookie.path.endsWith("/") || target.pathname[cookie.path.length] === "/");
+      return domainMatches && pathMatches && (!cookie.secure || target.protocol === "https:")
+        && (cookie.expirationDate === undefined || cookie.expirationDate > Date.now() / 1000);
+    });
   } },
   action: { async setBadgeBackgroundColor() {}, async setBadgeText() {} },
   runtime: { async sendMessage(message: { type: string; status?: string; error?: string }) {
@@ -461,6 +473,78 @@ try {
     check(job.subtitles.length === 1 && job.subtitles[0]?.url === subtitle.url
       && job.subtitles[0]?.language === "ru" && job.subtitles[0]?.name === "Русский",
     "DASH download included an unselected subtitle or lost selected language metadata");
+  });
+
+  await scenario("authenticated-segmented-capture-keeps-selected-cookie-scopes", async () => {
+    const cookie = (path: string, value: string): chrome.cookies.Cookie => ({
+      name: "session", value, domain: "media.example.org", path,
+      secure: true, hostOnly: true, httpOnly: true, sameSite: "lax", session: true, storeId: "0",
+    });
+    browserCookies = [
+      cookie("/auth-video/", "generated-video"),
+      cookie("/auth-audio/", "generated-audio"),
+      cookie("/auth-sub/", "generated-subtitle"),
+      cookie("/unselected/", "generated-unselected"),
+      { ...cookie("/", "generated-domain"), name: "domain-session", domain: ".example.org", hostOnly: false,
+        expirationDate: Date.now() / 1000 + 3600, session: false },
+      { ...cookie("/", "generated-expired"), name: "expired", expirationDate: 1, session: false },
+      { ...cookie("/", "generated-partitioned"), name: "partitioned", partitionKey: { topLevelSite: pageUrl } },
+    ];
+    try {
+      for (const [frameId, kind, suffix] of [[40, "hls", "m3u8"], [41, "dash", "mpd"]] as const) {
+        const main = `https://media.example.org/auth-video/source.${suffix}`;
+        const audioHost = kind === "hls" ? "media.example.org" : "audio.example.net";
+        browserCookies[1] = { ...browserCookies[1]!, domain: audioHost };
+        const audio = `https://${audioHost}/auth-audio/track.${kind === "hls" ? "m3u8" : "m4a"}`;
+        const video = kind === "hls" ? "https://media.example.org/auth-video/video.m3u8" : main;
+        const subtitle = "https://media.example.org/auth-sub/selected.vtt";
+        frames.set(frameId, { url: pageUrl, documentId: `document-${frameId}`, media: [main] });
+        await addCapture(tabId, frameId, {
+          kind, url: main, provider: "unknown", detectedAt: Date.now(),
+          ...(kind === "hls" ? { body: ["#EXTM3U",
+            `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Selected",DEFAULT=YES,URI="${audio}"`,
+            '#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=640x360,AUDIO="audio"',
+            "video.m3u8"].join("\n") } : {}),
+        }, `document-${frameId}`);
+        for (const [resourceKind, url] of [["audio", audio], ["subtitle", subtitle]] as const) {
+          if (kind === "hls" && resourceKind === "audio") continue;
+          await addCapture(tabId, frameId, {
+            kind: resourceKind, url, provider: "unknown", detectedAt: Date.now(),
+          }, `document-${frameId}`);
+        }
+        const captured = await readTabState(tabId);
+        const resource = (url: string) => captured.resources.find((item) => item.url === url && item.frameId === frameId)!;
+        resource(main).headers = [{ name: "cOoKiE", value: "generated-stale-flat-cookie" }];
+        await chrome.storage.session.set({ [`tab:${tabId}`]: captured });
+        const selection = { tabId, pageUrl, sourceId: resource(main).id,
+          audioIds: [resource(audio).id], subtitleIds: [resource(subtitle).id] };
+        const action = await send(selection, "download");
+        check(action.status === "sent", `Authenticated segmented capture was rejected: ${action.error}`);
+        const payload = JSON.parse(atob(new URL(String(posts.at(-1)!.body.uri)).searchParams.get("d")!
+          .replaceAll("-", "+").replaceAll("_", "/"))) as { captureId: string };
+        const resolved = await resolveCapture(pageUrl, { captureId: payload.captureId });
+        const typed = resolved as typeof resolved & { cookies?: ReturnType<typeof cookie>[] };
+        check(typed.cookies?.length === 4, "Selected audio/subtitle path cookies were not transferred as typed cookies");
+        check(typed.cookies.filter((item) => item.name === "session").map((item) => item.path).sort().join()
+          === "/auth-audio/,/auth-sub/,/auth-video/", "Same-name cookies lost their distinct paths");
+        check(typed.cookies.some((item) => item.domain === ".example.org" && !item.hostOnly), "Domain cookie scope changed");
+        check(typed.cookies.some((item) => item.name === "domain-session" && item.expirationDate === browserCookies[4]!.expirationDate),
+          "Cookie expiry changed");
+        check(typed.cookies.every((item) => item.secure && item.httpOnly), "Secure/HttpOnly cookie metadata changed");
+        check(!Object.keys(resolved.headers).some((name) => name.toLowerCase() === "cookie"), "Cookies were flattened into shared headers");
+        check(resolved.url === video && resolved.audioUrl === audio && resolved.subtitles[0]?.url === subtitle,
+          "Authenticated capture changed the selected tracks");
+        const playback = await send(selection, "play");
+        check(playback.status === "sent", "Authenticated qplay opening was rejected");
+        const playbackCookies = posts.at(-1)!.body.cookies as Array<{ name: string; path: string; host_only: boolean; expires: number | null }>;
+        check(playbackCookies.length === 4 && playbackCookies.some((item) => item.path === "/auth-audio/"),
+          "qplay lost the shared selected-cookie collection");
+        check(playbackCookies.some((item) => !item.host_only && item.expires === browserCookies[4]!.expirationDate),
+          "qplay cookie scope mapping changed");
+      }
+    } finally {
+      browserCookies = [];
+    }
   });
 
   await scenario("definite-native-rejection-explicit-retry", async () => {
