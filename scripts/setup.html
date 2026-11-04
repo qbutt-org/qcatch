@@ -66,13 +66,14 @@
       .instructions {
         color: #c1cad0;
       }
-      .folder-label {
+      .field-label {
         display: block;
-        margin: 30px 0 8px;
+        margin-bottom: 8px;
       }
-      .folder {
+      .field {
         display: flex;
         gap: 8px;
+        margin-bottom: 20px;
       }
       input {
         background: #20252a;
@@ -88,7 +89,7 @@
         background: #009df7;
         border: 0;
         border-radius: 5px;
-        color: white;
+        color: #101a22;
         cursor: pointer;
         flex: 0 0 auto;
         font: inherit;
@@ -113,11 +114,7 @@
       .result {
         color: #9aa5ae;
         min-height: 26px;
-        margin: 8px 0 30px;
-      }
-      a {
-        color: #66c4fc;
-        text-underline-offset: 3px;
+        margin: 0 0 16px;
       }
       .last {
         color: #9aa5ae;
@@ -129,7 +126,7 @@
         header {
           margin-bottom: 44px;
         }
-        .folder {
+        .field {
           align-items: flex-start;
           flex-direction: column;
         }
@@ -149,83 +146,106 @@
     <main>
       <h1 data-text="heading"></h1>
       <div class="instructions">
-        <p data-linux-only hidden>
+        <p data-install-only hidden>
           <span data-text="installLinux"></span>
           <code class="command">./qcatch --install</code>
         </p>
-        <p data-linux-only hidden>
+        <p data-install-only hidden>
           <span data-text="connectLinux"></span>
           <code class="command">~/.local/bin/qcatch --connect-browser chrome</code>
         </p>
-        <p data-windows-only>
+        <p id="browser-options" hidden>
           <span data-text="open"></span> <code>edge://extensions</code>
-          <span data-text="or"></span> <code>chrome://extensions</code>.
+          <span data-text="inEdge"></span> <code>chrome://extensions</code>
+          <span data-text="inChrome"></span>.
         </p>
+      </div>
+      <section id="connect" hidden>
+        <div id="address-field" hidden>
+          <label class="field-label" for="address" data-text="addressLabel"></label>
+          <div class="field">
+            <input id="address" readonly />
+            <button id="copy-address" type="button" data-text="copyAddress"></button>
+          </div>
+        </div>
         <p>
           <span data-text="enable"></span>
           <strong data-text="developer"></strong><span data-text="then"></span>
           <strong data-text="unpacked"></strong>.
-          <span data-text="folderLinux" data-linux-only hidden></span>
         </p>
-      </div>
-      <label class="folder-label" for="path" data-text="folder" data-windows-only></label>
-      <div class="folder" data-windows-only>
-        <input id="path" readonly /><button
-          id="copy"
-          type="button"
-          data-text="copy"
-        ></button>
-      </div>
-      <p class="result" id="result" role="status" data-windows-only></p>
-      <p class="last">
-        <span data-text="pin"></span>
-        <a href="https://qbutt-org.github.io/qplay/" data-text="player"></a>.
-      </p>
+        <label class="field-label" for="path" data-text="folder"></label>
+        <div class="field">
+          <input id="path" readonly />
+          <button id="copy-path" type="button" data-text="copyPath"></button>
+        </div>
+        <p class="result" id="result" role="status"></p>
+      </section>
+      <p class="last" data-text="pin"></p>
     </main>
     <script>
+      const browser = new URLSearchParams(location.search).get("browser");
       const messages = {
         ru: {
           heading: "Подключить qcatch",
-          installLinux: "Откройте терминал в распакованной папке и выполните:",
-          connectLinux: "Подключите Chrome или Chromium. Для Edge замените chrome на edge:",
-          folderLinux: "Выберите папку из поля extensionDirectory в ответе команды.",
-          open: "Откройте в браузере",
-          or: "или",
+          installLinux: "Выполните команду в терминале из распакованной папки.",
+          connectLinux: "Подключите Chrome или Chromium. Для Edge замените chrome на edge.",
+          addressLabel: "Откройте адрес в новой вкладке",
+          open: "Откройте",
+          inEdge: "в Edge или",
+          inChrome: "в Chrome",
           enable: "Включите",
           developer: "Режим разработчика",
           then: " и нажмите",
-          unpacked: "Загрузить распакованное",
+          unpacked: browser === "chrome" ? "Загрузить распакованное расширение" : "Загрузить распакованное",
           folder: "Выберите эту папку",
-          copy: "Копировать путь",
-          copied: "Путь скопирован",
-          failed: "Скопируйте выделенный путь вручную.",
-          pin: "Закрепите qcatch на панели браузера. Для просмотра видео установите",
-          player: "qplay",
+          copyAddress: "Копировать адрес",
+          copyPath: "Копировать путь",
+          copied: "Скопировано",
+          failed: "Скопируйте выделенный текст вручную.",
+          pin: "Закрепите qcatch на панели браузера.",
         },
         en: {
           heading: "Connect qcatch",
-          installLinux: "Open a terminal in the extracted folder and run:",
-          connectLinux: "Connect Chrome or Chromium. For Edge, replace chrome with edge:",
-          folderLinux: "Select the folder from extensionDirectory in the command output.",
+          installLinux: "Run this command in a terminal from the extracted folder.",
+          connectLinux: "Connect Chrome or Chromium. For Edge, replace chrome with edge.",
+          addressLabel: "Open this address in a new tab",
           open: "Open",
-          or: "or",
+          inEdge: "in Edge or",
+          inChrome: "in Chrome",
           enable: "Enable",
           developer: "Developer mode",
           then: " and click",
           unpacked: "Load unpacked",
           folder: "Select this folder",
-          copy: "Copy path",
-          copied: "Path copied",
-          failed: "Copy the selected path manually.",
-          pin: "Pin qcatch to the browser toolbar. To watch videos, install",
-          player: "qplay",
+          copyAddress: "Copy address",
+          copyPath: "Copy path",
+          copied: "Copied",
+          failed: "Copy the selected text manually.",
+          pin: "Pin qcatch to the browser toolbar.",
         },
       };
       const linux = document.documentElement.dataset.platform === "linux-x64";
-      for (const element of document.querySelectorAll("[data-linux-only]"))
-        element.hidden = !linux;
-      for (const element of document.querySelectorAll("[data-windows-only]"))
-        element.hidden = linux;
+      const address = browser === "edge" ? "edge://extensions"
+        : browser === "chrome" ? "chrome://extensions" : "";
+      for (const element of document.querySelectorAll("[data-install-only]"))
+        element.hidden = !linux || Boolean(address);
+      const connect = document.getElementById("connect");
+      connect.hidden = linux && !address;
+      document.getElementById("address-field").hidden = !address;
+      document.getElementById("browser-options").hidden = linux || Boolean(address);
+      document.getElementById("address").value = address;
+
+      if (!connect.hidden) {
+        const directory = new URL("extension", location.href);
+        let path = decodeURIComponent(directory.pathname);
+        if (!linux) {
+          const networkShare = directory.protocol === "file:" && directory.hostname;
+          path = (networkShare ? `//${directory.hostname}${path}` : path.replace(/^\//, ""))
+            .replaceAll("/", "\\");
+        }
+        document.getElementById("path").value = path;
+      }
+      const result = document.getElementById("result");
       const languageSelect = document.getElementById("language");
       let language = navigator.languages[0]?.toLowerCase().startsWith("ru")
         ? "ru"
@@ -244,7 +264,7 @@
         );
         for (const element of document.querySelectorAll("[data-text]"))
           element.textContent = messages[language][element.dataset.text];
-        document.getElementById("result").textContent = "";
+        result.textContent = "";
       }
       languageSelect.onchange = () => {
         language = languageSelect.value;
@@ -253,23 +273,16 @@
         } catch {}
         applyLanguage();
       };
-      if (!linux) {
-        const path = decodeURIComponent(
-          new URL("extension/", location.href).pathname,
-        )
-          .replace(/^\//, "")
-          .replaceAll("/", "\\");
-        const pathField = document.getElementById("path");
-        pathField.value = path;
-        document.getElementById("copy").onclick = async () => {
+      for (const id of ["address", "path"]) {
+        const field = document.getElementById(id);
+        document.getElementById(`copy-${id}`).onclick = async () => {
           try {
-            await navigator.clipboard.writeText(path);
-            document.getElementById("result").textContent =
-              messages[language].copied;
+            await navigator.clipboard.writeText(field.value);
+            result.textContent = messages[language].copied;
           } catch {
-            pathField.select();
-            document.getElementById("result").textContent =
-              messages[language].failed;
+            field.focus();
+            field.select();
+            result.textContent = messages[language].failed;
           }
         };
       }

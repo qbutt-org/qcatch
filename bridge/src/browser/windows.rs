@@ -4,7 +4,7 @@ use std::{
     process::{Command, Stdio},
 };
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use serde_json::json;
 use windows::Win32::{
     Foundation::{
@@ -44,21 +44,13 @@ pub fn application(name: &str) -> Option<PathBuf> {
 }
 
 pub fn connect(browser: &str) -> Result<()> {
-    let (page, executable) = match browser {
-        "edge" => ("edge://extensions", "msedge"),
-        "chrome" => ("chrome://extensions", "chrome"),
+    let executable = match browser {
+        "edge" => "msedge",
+        "chrome" => "chrome",
         _ => anyhow::bail!("Choose Microsoft Edge or Google Chrome"),
     };
     let executable = application(executable).context("Выбранный браузер не установлен.")?;
-    let native_executable = env::current_exe()?;
-    let extension = native_executable
-        .parent()
-        .context("Application directory missing")?
-        .join("extension");
-    ensure!(
-        extension.join("manifest.json").is_file(),
-        "Файлы расширения отсутствуют. Переустановите qcatch."
-    );
+    let (extension, page) = super::setup_page(&env::current_exe()?, browser)?;
     register()?;
 
     // Null child streams alone still inherit the original CLI pipe handles on Windows.
@@ -75,13 +67,7 @@ pub fn connect(browser: &str) -> Result<()> {
     }
 
     Command::new(executable)
-        .arg(page)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
-    Command::new("explorer.exe")
-        .arg(&extension)
+        .arg(page.as_str())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

@@ -28,22 +28,16 @@ pub fn application(name: &str) -> Option<PathBuf> {
 }
 
 pub fn connect(browser: &str) -> Result<()> {
-    let (page, names): (&str, &[&str]) = match browser {
-        "edge" => (
-            "edge://extensions",
-            &["microsoft-edge", "microsoft-edge-stable"],
-        ),
-        "chrome" => (
-            "chrome://extensions",
-            &[
-                "google-chrome",
-                "google-chrome-stable",
-                "google-chrome-for-testing",
-                "chromium",
-                "chromium-browser",
-                "chrome",
-            ],
-        ),
+    let names: &[&str] = match browser {
+        "edge" => &["microsoft-edge", "microsoft-edge-stable"],
+        "chrome" => &[
+            "google-chrome",
+            "google-chrome-stable",
+            "google-chrome-for-testing",
+            "chromium",
+            "chromium-browser",
+            "chrome",
+        ],
         _ => anyhow::bail!("Choose Microsoft Edge, Google Chrome or Chromium"),
     };
     let default = platform::default_browser_executable().and_then(|path| {
@@ -60,17 +54,10 @@ pub fn connect(browser: &str) -> Result<()> {
     let executable = default
         .or_else(|| names.iter().find_map(|name| application(name)))
         .context("The selected browser is not installed.")?;
-    let extension = env::current_exe()?
-        .parent()
-        .context("Application directory missing")?
-        .join("extension");
-    ensure!(
-        extension.join("manifest.json").is_file(),
-        "Extension files are missing. Reinstall qcatch."
-    );
+    let (extension, page) = super::setup_page(&env::current_exe()?, browser)?;
     register()?;
     Command::new(executable)
-        .arg(page)
+        .arg(page.as_str())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
