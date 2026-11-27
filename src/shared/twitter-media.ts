@@ -113,6 +113,7 @@ export function twitterMediaFromTweet(value: unknown): TwitterMedia[] {
     ?? mediaArray(legacy?.extended_entities)
     ?? mediaArray(tweet?.extended_entities)
     ?? (Array.isArray(tweet?.mediaDetails) ? tweet.mediaDetails : undefined)
+    ?? (Array.isArray(tweet?.media_entities2) ? tweet.media_entities2 : undefined)
     ?? [];
   const seen = new Set<string>();
   const result: TwitterMedia[] = [];

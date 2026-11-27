@@ -60,6 +60,32 @@ function captureTwitterResponse(value: unknown): void {
   if (capture) window.postMessage({ capture, channel: TWITTER_CHANNEL }, "*");
 }
 
+function captureTwitterHydration(script: HTMLScriptElement): void {
+  const source = script.textContent;
+  if (!source || source.length > MAX_TEXT_LENGTH || !source.includes("tweet_result_by_rest_id")) return;
+
+  // X embeds GraphQL JSON as strings in the streamed router state.
+  for (const [, literal] of source.matchAll(/value:("[^"\\]*(?:\\.[^"\\]*)*")/gs)) {
+    if (!literal?.includes("tweet_result_by_rest_id")) continue;
+    try {
+      captureTwitterResponse(JSON.parse(literal));
+    } catch {
+      // Only JSON string literals are needed from the router script.
+    }
+  }
+}
+
+if (window === window.top && ["x.com", "twitter.com"].includes(location.hostname)) {
+  new MutationObserver((mutations) => {
+    // The router removes its inline scripts as they run.
+    for (const mutation of mutations) {
+      for (const node of mutation.addedNodes) {
+        if (node instanceof HTMLScriptElement) captureTwitterHydration(node);
+      }
+    }
+  }).observe(document, { childList: true, subtree: true });
+}
+
 function isTikTokItemResponse(value: string): boolean {
   return location.hostname === "www.tiktok.com"
     && value.startsWith(`${location.origin}/api/item/detail/?`);

@@ -251,7 +251,8 @@ pub fn download(
             &selection,
             "--audio-multistreams",
             "--merge-output-format",
-            "mkv",
+            // MP4 preserves the YouTube HLS packets that Matroska rejects for missing timestamps.
+            "mp4",
             "--newline",
             "--progress",
             "--progress-delta",
